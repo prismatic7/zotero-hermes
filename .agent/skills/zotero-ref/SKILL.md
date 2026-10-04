@@ -104,18 +104,24 @@ then throws:
 
 ```typescript
 // WRONG — Profile.dir is a string, so this throws at .clone()
-const profileDir = (Zotero as any).Profile?.dir || Zotero.getProfileDirectory?.();
+const profileDir =
+  (Zotero as any).Profile?.dir || Zotero.getProfileDirectory?.();
 const dir = profileDir.clone() as nsIFile;
 ```
 
 ```typescript
 // RIGHT — go through the shared helper
-import { getProfileDir, getDataDir, ensureHermesDir, getProfileDirPath, getDataDirPath }
-  from "../../utils/zoteroPaths";
+import {
+  getProfileDir,
+  getDataDir,
+  ensureHermesDir,
+  getProfileDirPath,
+  getDataDirPath,
+} from "../../utils/zoteroPaths";
 
-const baseDir = getProfileDir() || getDataDir();       // nsIFile | null
+const baseDir = getProfileDir() || getDataDir(); // nsIFile | null
 const dirPath = ensureHermesDir(baseDir, "workspace"); // creates + returns path
-const dataPath = getDataDirPath();                     // string
+const dataPath = getDataDirPath(); // string
 ```
 
 `src/utils/zoteroPaths.ts` converts the string via
