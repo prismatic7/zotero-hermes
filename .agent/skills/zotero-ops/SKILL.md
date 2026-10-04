@@ -97,6 +97,14 @@ bump from `package.json`, and note the tag you create may skip a number.
 
 ## Release Checklist
 
+> **Verify with the gate's OWN scope, before you commit — not after.**
+> `lint:check` is `prettier --check . && eslint .` (whole repo). A narrower
+> local check (`prettier --check src test`) passes while CI fails. Two releases
+> were burned on this: once on CHANGELOG.md emphasis, once on a skill file.
+> Corollary: **never commit while a gate you just ran is red**, even if the
+> commit is docs-only and "CI only sees committed content". Either fix it in
+> the same commit, or do not commit.
+
 - [ ] Version bumped in package.json (`npm version patch --no-git-tag-version`)
 - [ ] CHANGELOG.md `[Unreleased]` promoted to `[<ver>] — YYYY-MM-DD`
 - [ ] **`npx prettier --check .`** — the repo's `lint:check` is whole-repo, not
