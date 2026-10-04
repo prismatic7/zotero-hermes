@@ -162,6 +162,96 @@ Two related API facts worth remembering:
 - Firefox 140 ESR based (Zotero 10; was 115 ESR in Zotero 9)
 - Check compatibility with Zotero beta releases
 
+## Annotations (verified against Zotero 10.0.5 source, 2026-10-04)
+
+Creating an annotation by hand is order-sensitive. Getting it wrong throws, or
+silently writes a corrupt item:
+
+```typescript
+// Zotero 10.0.5 contracts — all line refs to xpcom/data/item.js
+const ann = new Zotero.Item("annotation");
+ann.parentItemID = pdfItem.id; // the PDF attachment, not the parent item
+// 1. annotationType MUST be assigned FIRST (:4510) — other props throw before it
+ann.annotationType = "highlight"; // highlight|underline|note|text|image|ink
+// 2. annotationText is ONLY legal on highlight/underline (:4530)
+ann.annotationText = "quoted text";
+ann.annotationComment = "my note";
+// 3. annotationColor must match /^#[a-f0-9]{6}$/i (:4537)
+ann.annotationColor = "#ffd400";
+ann.annotationPageLabel = "12";
+// 4. annotationPosition is the ONLY geometry. There is no default rect —
+//    never fabricate `rects: [[0,0,100,20]]`: that writes a highlight at a
+//    location that does not exist. Refuse instead.
+ann.annotationPosition = '{"pageIndex":12,"rects":[[1,2,3,4]]}';
+await ann.saveTx();
+```
+
+Searching annotations uses Zotero's own conditions (`xpcom/data/searchConditions.js:725-795`),
+all at `level: 'annotation'`:
+
+```typescript
+const search = new Zotero.Search();
+// `search.libraryID = …` throws (read-only); the Search() constructor already
+// scopes to the user library.
+search.addCondition("annotationText", "contains", "term"); // contains|doesNotContain
+search.addCondition("annotationComment", "contains", "term");
+search.addCondition("annotationType", "is", "highlight");
+search.addCondition("annotationColor", "is", "#ffd400");
+const ids = await search.search();
+```
+
+Do **not** use `Zotero.Annotations.saveFromJSON()` to create annotations — it is
+an _importer_ and requires an existing key (`annotations.js:214`).
+
+## Citations
+
+Citation generation must use `previewCitationCluster`; it does not mutate engine
+state, so calls for different items are independent.
+
+```typescript
+const style = Zotero.Styles.get(styleID); // keyed on the styleID URI ONLY
+if (!style) throw new Error("style not found");
+// getCiteProc(locale, format, { cache }) — matches quickCopy.js:46
+const engine = style.getCiteProc(undefined, "text", { cache: true });
+try {
+  engine.updateItems([item.id]);
+  const inText = engine.previewCitationCluster(
+    { citationItems: [{ id: item.id }], properties: {} },
+    [],
+    [],
+    "text",
+  );
+  const bib = engine.makeBibliography(); // [meta, string[]] — entries at [1]
+} finally {
+  engine.free(); // a cite-process engine holds a wasm instance; leaking one per citation is real cost
+}
+```
+
+Do **not** use `appendCitationCluster(citation, true)` and expect `[[id, string], …]`.
+Zotero 10 uses the **citeproc-rs bridge**, whose `appendCitationCluster(citation)`
+takes ONE argument and returns a different shape — the old call was silently
+unusable.
+
+`Zotero.Styles.get()` accepts only a full styleID URI. Resolve a short name
+("chicago") through `Zotero.Styles.getVisible()` and match `title`/`shortTitle`.
+Always return the resolved style's own `styleID`, never the string the caller typed.
+
+## OCR — not available via the plugin API
+
+There is **no `Zotero.OCR`** and no OCR entry point in Zotero 10.0.5. A grep for
+an OCR surface across the extracted tree hits one file, `xpcom/recognizeDocument.js`,
+and that is the _metadata_-recognition path: it requires an existing text layer
+(`recognizePDF.couldNotRead`) and POSTs the document to a **remote** Zotero
+service (`_getBaseURL() + 'recognize'`, `:373`). Do not promise scanned-item OCR
+as a plugin capability; it needs an external engine plus its own spike.
+
+## Directories (Zotero 10)
+
+`Zotero.Profile.dir` and `Zotero.DataDirectory.dir` are **plain strings** in
+Zotero 10 — they were `nsIFile` objects in Zotero 9. Calling `.clone()` on them
+throws `TypeError: p.clone is not a function`, silently. Convert with
+`Zotero.File.pathToFile()` (see `src/utils/zoteroPaths.ts`).
+
 ## UI Guidelines
 
 ### XUL Elements
