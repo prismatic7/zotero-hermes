@@ -32,7 +32,7 @@
     "update-deps": "npm update --save"
   },
   "dependencies": {
-    "react": "^18.3.1",
+    "react": "^19.3.0",
     "react-dom": "^18.3.1",
     "zotero-plugin-toolkit": "^5.2.0"
   },
@@ -40,7 +40,7 @@
     "@types/chai": "^5.2.3",
     "@types/mocha": "^10.0.10",
     "@types/node": "^24.10.0",
-    "@types/react": "^18.3.31",
+    "@types/react": "^19.3.0",
     "@types/react-dom": "^18.3.7",
     "@zotero-plugin/eslint-config": "^0.6.7",
     "chai": "^6.2.1",
