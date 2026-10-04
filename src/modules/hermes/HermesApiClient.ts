@@ -2,6 +2,7 @@ import type Addon from "../../addon";
 
 import { buildPersonaPrompt, buildItemContext } from "./systemPrompt";
 import type { ChatClient, ChatSessionUpdate, PromptContextItem } from "./types";
+import { getDataDirPath } from "../../utils/zoteroPaths";
 
 /**
  * Client for the Hermes Agent REST API with Server-Sent Events streaming.
@@ -152,10 +153,7 @@ export class HermesApiClient implements ChatClient {
       });
     }
 
-    const zoteroDataDir =
-      (Zotero as any).getZoteroDirectory?.()?.path ||
-      (Zotero as any).DataDirectory?.dir ||
-      "";
+    const zoteroDataDir = getDataDirPath();
     const zoteroStorageDir = zoteroDataDir ? `${zoteroDataDir}/storage` : "";
 
     // Build user message with context items

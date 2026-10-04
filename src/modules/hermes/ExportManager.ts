@@ -2,6 +2,7 @@ import type Addon from "../../addon";
 import type { Conversation } from "./ConversationManager";
 import type { AttachedItem } from "./ItemManager";
 import { stripAnsi } from "../../utils/stripAnsi";
+import { getDataDir, getProfileDir } from "../../utils/zoteroPaths";
 
 export interface ExportResult {
   message: string;
@@ -306,17 +307,7 @@ export class ExportManager {
     attachedItems: AttachedItem[] = [],
   ): ExportResult {
     try {
-      const profileDir =
-        (Zotero as any).Profile?.dir || Zotero.getProfileDirectory?.();
-      let baseDir: nsIFile | null = null;
-      if (profileDir) {
-        baseDir = profileDir.clone() as nsIFile;
-      } else {
-        const dataDir = (Zotero as any).getZoteroDirectory?.()?.path;
-        if (dataDir) {
-          baseDir = Zotero.File.pathToFile(dataDir);
-        }
-      }
+      const baseDir: nsIFile | null = getProfileDir() || getDataDir();
       if (!baseDir) {
         return {
           success: false,

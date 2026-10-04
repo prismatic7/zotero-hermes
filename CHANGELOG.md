@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Every Zotero directory silently failed to resolve**: Zotero 10 changed
+  `Zotero.Profile.dir` and `Zotero.DataDirectory.dir` from `nsIFile` objects
+  to **plain strings**. The plugin picked `Profile.dir` first and called
+  `.clone()` on it — `TypeError: p.clone is not a function` — which silently
+  disabled conversation persistence, the audit log, the agent workspace
+  directory and local export. Resolution now goes through a shared
+  `src/utils/zoteroPaths.ts` helper that converts the string via
+  `Zotero.File.pathToFile()` (and still tolerates an `nsIFile`).
+- **Child-note titles were always dropped**: `extractItemData` discarded a
+  note title whenever it was a prefix of the note body. Zotero derives a
+  note's title from its first line, so that is the normal case — the
+  condition was inverted and every note arrived as `title: undefined`.
+- **`TagManager.renameTag` crashed on real libraries**: it calls
+  `.filter()` on `Zotero.Items.getAsync(itemIDs)`, which is correct (an
+  array in, an array out), but the test stub returned a bare object — so the
+  code path was never exercised. The stub now models the real contract.
+
 ## [0.3.4] — 2026-10-04
 
 ### Fixed

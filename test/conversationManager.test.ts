@@ -130,15 +130,18 @@ function installZoteroGlobals(fs: MockFs) {
   (globalThis as any).__realZotero = realZotero;
   (globalThis as any).Zotero = {
     ...realZotero,
-    getProfileDirectory: () => {
-      if (!fs.profileDir) return null;
-      const dir = new MockFile(fs.profileDir);
-      dir.isDirectory = true;
-      dir.existsFlag = true;
-      return dir;
+    // Real Zotero 10 sets `Profile.dir` to a plain STRING path
+    // (xpcom/profile.js:30) and `DataDirectory.dir` likewise; the plugin
+    // resolves both through Zotero.File.pathToFile. Model that shape here —
+    // mocking getProfileDirectory() as an nsIFile masked the production bug
+    // where `.clone()` was called on the string.
+    Profile: { ...(realZotero?.Profile || {}), dir: fs.profileDir || "" },
+    DataDirectory: {
+      ...(realZotero?.DataDirectory || {}),
+      dir: fs.profileDir ? fs.profileDir : "",
     },
-    // When profileDir is null, the fallback data dir must also be null
-    // so ConversationManager cannot persist anywhere.
+    // When profileDir is null there is no fallback data directory either, so
+    // ConversationManager cannot persist anywhere.
     getZoteroDirectory: () =>
       fs.profileDir ? realZotero?.getZoteroDirectory?.() : null,
     File: {

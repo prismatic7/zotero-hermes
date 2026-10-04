@@ -436,9 +436,12 @@ export class ItemManager {
                     ? (noteItem as any).getNoteTitle()
                     : undefined;
                 extractedNotes.push({
+                  // Zotero derives a note's title from its first line, so the
+                  // title is usually a PREFIX of the content. Only drop it when
+                  // it is redundant (identical to the whole note); a
+                  // prefix-match is the normal case and must be kept.
                   title:
-                    noteTitle &&
-                    noteTitle !== cleanText.slice(0, noteTitle.length)
+                    noteTitle && noteTitle !== cleanText
                       ? noteTitle
                       : undefined,
                   content:

@@ -9,6 +9,13 @@ import {
   getHomeDir,
 } from "./HermesBinaryFinder";
 import type { ChatClient, ChatSessionUpdate, PromptContextItem } from "./types";
+import {
+  ensureHermesDir,
+  getDataDir,
+  getDataDirPath,
+  getProfileDir,
+  getProfileDirPath,
+} from "../../utils/zoteroPaths";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -228,14 +235,8 @@ export class HermesClient implements ChatClient {
     const promptBlocks: Array<{ type: string; text: string }> = [];
 
     // System instruction: use fs tools to read Zotero SQLite directly
-    const zoteroDataDir =
-      (Zotero as any).getZoteroDirectory?.()?.path ||
-      (Zotero as any).DataDirectory?.dir ||
-      "";
-    const zoteroProfileDir =
-      (Zotero as any).Profile?.dir?.path ||
-      Zotero.getProfileDirectory?.()?.path ||
-      "";
+    const zoteroDataDir = getDataDirPath();
+    const zoteroProfileDir = getProfileDirPath();
     const zoteroStorageDir = zoteroDataDir ? `${zoteroDataDir}/storage` : "";
     const zoteroDbPath = zoteroDataDir ? `${zoteroDataDir}/zotero.sqlite` : "";
 
@@ -773,30 +774,17 @@ export class HermesClient implements ChatClient {
     // profile or data directory where zotero.sqlite and sensitive credentials reside.
     let path = "";
     try {
-      const profileDir =
-        (Zotero as any).Profile?.dir || Zotero.getProfileDirectory?.();
-      if (profileDir) {
-        const wsDir = profileDir.clone() as nsIFile;
-        wsDir.append("zotero-hermes");
-        wsDir.append("workspace");
-        if (!wsDir.exists()) {
-          wsDir.create(
-            Components.interfaces.nsIFile.DIRECTORY_TYPE as number,
-            0o755,
-          );
-        }
-        path = wsDir.path;
-      }
+      path = ensureHermesDir(
+        getProfileDir() || getDataDir(),
+        "workspace",
+        this.addon,
+      );
     } catch {
       // ignore
     }
 
     if (!path) {
-      const profileDir =
-        (Zotero as any).Profile?.dir?.path ||
-        Zotero.getProfileDirectory?.()?.path;
-      const dataDir = (Zotero as any).getZoteroDirectory?.()?.path || "";
-      path = profileDir || dataDir || "";
+      path = getProfileDirPath() || getDataDirPath() || "";
     }
 
     const request: JsonRpcRequest = {

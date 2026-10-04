@@ -12,6 +12,8 @@
  *   should never break the user experience.
  */
 
+import { ensureHermesDir, getDataDir, getProfileDir } from "./zoteroPaths";
+
 export interface AuditEntry {
   action:
     | "connection"
@@ -35,19 +37,9 @@ export class AuditLog {
 
   private get logFilePath(): string {
     try {
-      const profileDir =
-        (Zotero as any).Profile?.dir || Zotero.getProfileDirectory?.();
-      if (!profileDir) return "";
-      const dir = profileDir.clone() as nsIFile;
-      dir.append("zotero-hermes");
-      if (!dir.exists()) {
-        dir.create(
-          Components.interfaces.nsIFile.DIRECTORY_TYPE as number,
-          0o755,
-        );
-      }
-      dir.append("audit-log.json");
-      return dir.path;
+      const dir = getProfileDir() || getDataDir();
+      if (!dir) return "";
+      return ensureHermesDir(dir, "", this.addon) + "/audit-log.json";
     } catch {
       return "";
     }

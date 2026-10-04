@@ -1,5 +1,10 @@
 import type Addon from "../../addon";
 import type { ChatMessage } from "../../views/types";
+import {
+  ensureHermesDir,
+  getDataDir,
+  getProfileDir,
+} from "../../utils/zoteroPaths";
 
 export interface Conversation {
   id: string;
@@ -35,17 +40,7 @@ export class ConversationManager {
    * survive restarts.
    */
   private getBaseDir(): string {
-    const profileDir =
-      (Zotero as any).Profile?.dir || Zotero.getProfileDirectory?.();
-    let baseDir: nsIFile | null = null;
-    if (profileDir) {
-      baseDir = profileDir.clone() as nsIFile;
-    } else {
-      const dataDir = (Zotero as any).getZoteroDirectory?.()?.path;
-      if (dataDir) {
-        baseDir = Zotero.File.pathToFile(dataDir);
-      }
-    }
+    const baseDir = getProfileDir() || getDataDir();
     if (!baseDir) {
       this.addon.log(
         "[ConversationManager] No profile or data directory available — conversations will not be persisted",
@@ -55,15 +50,7 @@ export class ConversationManager {
     const folderName =
       this.addon.data.hermes?.preferences?.get("chatSaveFolder", "hermes") ||
       "hermes";
-    baseDir.append("zotero-hermes");
-    baseDir.append(folderName);
-    if (!baseDir.exists()) {
-      baseDir.create(
-        Components.interfaces.nsIFile.DIRECTORY_TYPE as number,
-        0o755,
-      );
-    }
-    return baseDir.path;
+    return ensureHermesDir(baseDir, folderName, this.addon);
   }
 
   /**

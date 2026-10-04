@@ -56,7 +56,11 @@ describe("TagManager", function () {
       Items: {
         ...(realZotero?.Items || {}),
         get: (_id: number) => item,
-        getAsync: async (_id: number) => item,
+        // Real Zotero.Items.getAsync returns an ARRAY for an array of ids and
+        // the object itself for a single id (dataObjects.js:152-211).
+        // renameTag passes an array and calls .filter() on the result, so the
+        // stub must preserve that shape.
+        getAsync: async (ids: unknown) => (Array.isArray(ids) ? [item] : item),
       },
       Tags: {
         ...(realZotero?.Tags || {}),
@@ -149,6 +153,9 @@ describe("TagManager", function () {
       { count: 5, tag: "quantum" },
       { count: 2, tag: "neural" },
     ]);
+
+    const manager = new TagManager(mockAddon());
+    const suggestions = await manager.suggestTags(item.id);
 
     expect(suggestions).to.be.an("array");
     const suggestedNames = suggestions.map((s) => s.tag);
