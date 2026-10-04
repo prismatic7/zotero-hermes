@@ -145,4 +145,117 @@ describe("ExportManager", function () {
     expect(chronoEdge.fromNode).to.equal("paper-KEY1");
     expect(chronoEdge.toNode).to.equal("paper-KEY2");
   });
+
+  describe("annotation notes (B3)", function () {
+    // Real Better BibTeX creators arrive as "Surname, Given"; Zotero renders
+    // them that way for `getCreators()` on a normal author field.
+    const item = {
+      title: "Political Acoustic Ecology",
+      key: "ABCD1234",
+      creators: ["Scheidel, Walter", "Meyer, Birgit"],
+      date: "2023",
+      doi: "10.21810/aer.v1i1.5379",
+      citekey: "scheidel2023political",
+    };
+
+    it("titles the note `Title — Author`, never the citekey", function () {
+      const exporter = new ExportManager(mockAddon);
+      const title = exporter.buildAnnotationNoteTitle(item);
+
+      expect(title).to.equal("Political Acoustic Ecology — Scheidel");
+      expect(title).to.not.include("scheidel2023political");
+      // The separator is an em dash, not a hyphen.
+      expect(title).to.include("\u2014");
+    });
+
+    it("strips a Better BibTeX year disambiguator from the surname", function () {
+      const exporter = new ExportManager(mockAddon);
+      const title = exporter.buildAnnotationNoteTitle({
+        ...item,
+        creators: ["Scheidel, Walter 2023"],
+      });
+      expect(title).to.equal("Political Acoustic Ecology — Scheidel");
+    });
+
+    it("falls back to the bare title when there is no creator", function () {
+      const exporter = new ExportManager(mockAddon);
+      expect(
+        exporter.buildAnnotationNoteTitle({ ...item, creators: [] }),
+      ).to.equal("Political Acoustic Ecology");
+    });
+
+    it("sanitises filename-illegal characters out of the title", function () {
+      const exporter = new ExportManager(mockAddon);
+      const title = exporter.buildAnnotationNoteTitle({
+        ...item,
+        title: 'Sound/Image: "A" <Study>',
+      });
+      expect(title).to.not.match(/[/\\?%*:|"<>]/);
+      expect(title).to.include("Sound-Image");
+    });
+
+    it("puts the citekey in frontmatter and the body, not the note name", function () {
+      const exporter = new ExportManager(mockAddon);
+      const md = exporter.buildAnnotationNote(item, []);
+
+      expect(md).to.include('citekey: "scheidel2023political"');
+      // Aliased so search-by-citekey still resolves the note.
+      expect(md).to.include('aliases:\n  - "scheidel2023political"');
+      expect(md).to.include("`@scheidel2023political`");
+      expect(md).to.include("zotero://select/items/ABCD1234");
+      // ...but never the filename.
+      expect(md.split("\n")[0]).to.not.include("citekey");
+    });
+
+    it("quotes highlights and comments but not the user's own notes", function () {
+      const exporter = new ExportManager(mockAddon);
+      const md = exporter.buildAnnotationNote(item, [
+        {
+          id: "ANN1",
+          page: 4,
+          type: "highlight",
+          text: "The ear is a political organ.",
+          comment: "Compare to Adorno",
+          color: "#ffd400",
+        },
+        {
+          id: "ANN2",
+          page: 9,
+          type: "note",
+          text: "This whole section is really about listening as labour.",
+        },
+      ]);
+
+      // Source text is a blockquote...
+      expect(md).to.include("> The ear is a political organ.");
+      // ...the user's note is not.
+      expect(md).to.not.include(
+        "> This whole section is really about listening",
+      );
+      expect(md).to.include(
+        "This whole section is really about listening as labour.",
+      );
+      expect(md).to.include("💬 Compare to Adorno");
+    });
+
+    it("groups annotations by page regardless of input order", function () {
+      const exporter = new ExportManager(mockAddon);
+      const md = exporter.buildAnnotationNote(item, [
+        { id: "B", page: 9, type: "highlight", text: "later" },
+        { id: "A", page: 2, type: "highlight", text: "earlier" },
+      ]);
+
+      expect(md.indexOf("## Page 2")).to.be.lessThan(md.indexOf("## Page 9"));
+    });
+
+    it("says so plainly when there are no annotations", function () {
+      const exporter = new ExportManager(mockAddon);
+      const md = exporter.buildAnnotationNote(item, []);
+
+      expect(md).to.include("*No annotations yet.*");
+      // A note with no annotations must still be valid frontmatter.
+      expect(md.startsWith("---\n")).to.equal(true);
+      expect(md).to.include("annotation_count: 0");
+    });
+  });
 });

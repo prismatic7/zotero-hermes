@@ -1,6 +1,7 @@
 import type Addon from "../../addon";
 import type { Conversation } from "./ConversationManager";
 import type { AttachedItem } from "./ItemManager";
+import type { AnnotationData } from "./AnnotationManager";
 import { stripAnsi } from "../../utils/stripAnsi";
 import { getDataDir, getProfileDir } from "../../utils/zoteroPaths";
 
@@ -34,6 +35,30 @@ export interface CanvasEdge {
 export interface CanvasData {
   edges: CanvasEdge[];
   nodes: CanvasNode[];
+}
+
+/**
+ * One item's annotations plus the metadata needed for a standalone Obsidian
+ * note. Kept structural (rather than importing `AttachedItem`) so the note
+ * builder is a pure function a test can drive without a Zotero runtime.
+ */
+export interface AnnotationNoteSource {
+  title: string;
+  key: string;
+  creators?: string[];
+  date?: string;
+  doi?: string;
+  citekey?: string;
+}
+
+export interface AnnotationNoteOptions {
+  /** Subfolder inside `Hermes/` in the vault. Default `Annotations`. */
+  folderName?: string;
+  /**
+   * Regenerate over an existing note. Off by default: overwriting a note the
+   * user may have annotated by hand is a clobber, not an export.
+   */
+  overwrite?: boolean;
 }
 
 /**
@@ -215,6 +240,261 @@ export class ExportManager {
         message: `Failed to export to Obsidian: ${errorMsg}`,
       };
     }
+  }
+
+  /**
+   * Build the Obsidian note title for an item: `Title — Author`.
+   *
+   * WHY NOT THE CITEKEY: a citekey is a citation handle, not a filing name.
+   * `Scheidel2023a` tells a reader nothing when they see it in a graph or a
+   * search result, and it changes if Better BibTeX is re-pinned. The title is
+   * what the user recognises; the author disambiguates the many works by one
+   * author. The citekey is still recorded (frontmatter + an inline backlink) so
+   * citation workflows keep working — it is demoted, not discarded.
+   */
+  public buildAnnotationNoteTitle(item: AnnotationNoteSource): string {
+    const title = (item.title || "").trim() || "Untitled";
+
+    // "Surname, Given" → "Surname". Strip a trailing disambiguator, which is
+    // Better BibTeX's addition and not part of the name.
+    const surname = (item.creators?.[0] || "")
+      .split(",")[0]
+      .replace(/\s+\d+$/, "")
+      .trim();
+
+    const base = surname ? `${title} — ${surname}` : title;
+    return this.sanitizeFilename(base);
+  }
+
+  /**
+   * Strip characters that are unsafe in a filename or awkward in an Obsidian
+   * wikilink. `—` (em dash) is intentionally preserved: it is the separator the
+   * title format specifies, and it is a legal filename character.
+   */
+  private sanitizeFilename(name: string): string {
+    return name
+      .replace(/[/\\?%*:|"<>]/g, "-")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  /**
+   * Render one item's annotations as a standalone Obsidian note.
+   *
+   * The annotations are grouped by page, because that is how they are read back
+   * against the source. Notes and comments keep their own voice: a `note`
+   * annotation is the user thinking, not a quotation, and rendering it as a
+   * `>` blockquote would misrepresent it as source text.
+   */
+  public buildAnnotationNote(
+    item: AnnotationNoteSource,
+    annotations: AnnotationData[],
+  ): string {
+    const noteTitle = this.buildAnnotationNoteTitle(item);
+    const author = (item.creators?.[0] || "").trim();
+    const escapedTitle = item.title.replace(/"/g, '\\"');
+
+    // YAML frontmatter. `aliases` carries the citekey so search-by-citekey works.
+    let fm = "---\n";
+    fm += `title: "${escapedTitle}"\n`;
+    if (author) fm += `author: "${author.replace(/"/g, '\\"')}"\n`;
+    if (item.date) fm += `date: "${item.date}"\n`;
+    if (item.doi) fm += `doi: "${item.doi}"\n`;
+    if (item.citekey) fm += `citekey: "${item.citekey}"\n`;
+    fm += `zotero_key: "${item.key}"\n`;
+    fm += `zotero_select_uri: "zotero://select/items/${item.key}"\n`;
+    fm += `annotation_count: ${annotations.length}\n`;
+    fm += `tags:\n  - hermes\n  - zotero-annotations\n`;
+    if (item.citekey) fm += `aliases:\n  - "${item.citekey}"\n`;
+    fm += "---\n\n";
+
+    let body = `# ${noteTitle}\n\n`;
+
+    // Provenance links. The citekey lives here, in the body, where a citation
+    // belongs — never as the note's name.
+    body += `> [!info] Source\n`;
+    body += `> [Open in Zotero](zotero://select/items/${item.key})`;
+    if (item.doi) body += ` · [DOI](https://doi.org/${item.doi})`;
+    if (item.citekey) {
+      const year = (item.date || "").slice(0, 4);
+      const name = author.split(",")[0] || author;
+      const citation = [name, year].filter(Boolean).join(" ");
+      body += ` · Citation: \`@${item.citekey}\``;
+      if (citation) body += ` (${citation})`;
+    }
+    body += `\n\n`;
+
+    if (annotations.length === 0) {
+      body += `*No annotations yet.*\n`;
+      return fm + body;
+    }
+
+    // Group by page. `getAnnotations` sorts by page, but this must not depend
+    // on caller ordering.
+    const byPage = new Map<number, AnnotationData[]>();
+    for (const ann of annotations) {
+      const page = Number.isFinite(ann.page) ? ann.page : 0;
+      const list = byPage.get(page) ?? [];
+      list.push(ann);
+      byPage.set(page, list);
+    }
+
+    for (const page of [...byPage.keys()].sort((a, b) => a - b)) {
+      body += `## Page ${page}\n\n`;
+      for (const ann of byPage.get(page)!) {
+        const colour = ann.color ? ` · \`${ann.color}\`` : "";
+        body += `**${ann.type}**${colour}\n\n`;
+
+        // A quotation is quoted; the user's own note is not.
+        if (ann.type === "note" || ann.type === "text") {
+          if (ann.text) body += `${ann.text}\n\n`;
+        } else if (ann.text) {
+          body += ann.text
+            .split("\n")
+            .map((line) => `> ${line}`)
+            .join("\n");
+          body += `\n\n`;
+        }
+
+        if (ann.comment) {
+          body += `💬 ${ann.comment}\n\n`;
+        }
+      }
+    }
+
+    return fm + body;
+  }
+
+  /**
+   * Write an item's annotations to the Obsidian vault as a standalone note.
+   *
+   * File I/O, so it needs the Zotero runtime; the note *content* comes from the
+   * pure `buildAnnotationNote`.
+   *
+   * Overwrite discipline (fleet convention: never clobber a human edit): the
+   * default is to refuse when the note already exists, unless the file's
+   * content is byte-identical to what we would write — in which case there is
+   * nothing to clobber and the write is a no-op. Re-export over a note the user
+   * has edited requires `overwrite: true`.
+   */
+  public async exportAnnotationsToObsidian(
+    item: AnnotationNoteSource,
+    annotations: AnnotationData[],
+    options: AnnotationNoteOptions = {},
+  ): Promise<ExportResult> {
+    const vaultPath =
+      this.addon.data.hermes?.preferences?.get<string>(
+        "obsidianVaultPath",
+        "",
+      ) || "";
+    if (!vaultPath || !vaultPath.trim()) {
+      return {
+        success: false,
+        message:
+          "No Obsidian vault folder configured. Please set your vault path in Zotero Settings → Hermes → Saving Conversations.",
+      };
+    }
+
+    const noteTitle = this.buildAnnotationNoteTitle(item);
+
+    try {
+      const vaultDir = Zotero.File.pathToFile(vaultPath.trim());
+      if (!vaultDir.exists() || !vaultDir.isDirectory) {
+        return {
+          success: false,
+          message: `Obsidian vault directory not found: "${vaultPath}"`,
+        };
+      }
+
+      const notesFolder = this.ensureVaultFolder(vaultDir, [
+        "Hermes",
+        options.folderName || "Annotations",
+      ]);
+      if (!notesFolder) {
+        return {
+          success: false,
+          message:
+            "Could not create the Hermes/Annotations folder in the vault.",
+        };
+      }
+
+      const targetFile = notesFolder.clone() as nsIFile;
+      targetFile.append(`${noteTitle}.md`);
+
+      const markdown = this.buildAnnotationNote(item, annotations);
+
+      if (targetFile.exists()) {
+        const existing = Zotero.File.getContents(targetFile) || "";
+        if (existing === markdown) {
+          // Nothing would change; a write here is pure clobber risk.
+          return {
+            success: true,
+            path: targetFile.path,
+            message: `Note already up to date: **${noteTitle}.md** (no changes).`,
+          };
+        }
+        if (!options.overwrite) {
+          return {
+            success: false,
+            path: targetFile.path,
+            message:
+              `A note named **${noteTitle}.md** already exists and differs from the current annotations. ` +
+              `Nothing was written — refusing to overwrite a note you may have edited. ` +
+              `Re-run with overwrite enabled to replace it.`,
+          };
+        }
+      }
+
+      Zotero.File.putContents(targetFile, markdown);
+
+      const verb = options.overwrite ? "Overwrote" : "Created";
+      this.addon.data.hermes?.auditLog?.record(
+        "file_change",
+        `Obsidian Annotation Export: ${targetFile.path}`,
+        "success",
+        {
+          itemKey: item.key,
+          annotations: annotations.length,
+          path: targetFile.path,
+          overwritten: Boolean(options.overwrite && targetFile.exists()),
+        },
+      );
+
+      return {
+        success: true,
+        path: targetFile.path,
+        message: `${verb} **${noteTitle}.md** with ${annotations.length} annotation${annotations.length === 1 ? "" : "s"}.`,
+      };
+    } catch (err) {
+      const errorMsg = (err as Error).message;
+      this.addon.log(`ExportManager: annotation export failed: ${errorMsg}`);
+      return {
+        success: false,
+        message: `Failed to export annotations: ${errorMsg}`,
+      };
+    }
+  }
+
+  /** Create (if needed) and return a nested folder inside the vault root. */
+  private ensureVaultFolder(root: nsIFile, parts: string[]): nsIFile | null {
+    let current = root;
+    for (const part of parts) {
+      const next = current.clone() as nsIFile;
+      next.append(part);
+      if (!next.exists()) {
+        try {
+          next.create(
+            Components.interfaces.nsIFile.DIRECTORY_TYPE as number,
+            0o755,
+          );
+        } catch {
+          // A concurrent create, or a path that already exists as a file.
+          if (!next.exists()) return null;
+        }
+      }
+      current = next;
+    }
+    return current;
   }
 
   /**

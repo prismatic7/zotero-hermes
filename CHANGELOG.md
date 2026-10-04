@@ -22,6 +22,17 @@ All notable changes to this project are documented in this file.
   - `AnnotationManager` — create, edit and library-wide search.
   - `CitationManager` — `formatCitation` returns in-text and bibliography
     forms with the resolved style.
+  - `ExportManager.exportAnnotationsToObsidian` — export an item's PDF
+    annotations as a standalone Obsidian note titled **`Title — Author`**
+    (B3). The citekey is deliberately _not_ the note name: it is a citation
+    handle, not a filing name, and it changes when Better BibTeX re-pins. It
+    is recorded in frontmatter (`citekey:`, plus an `aliases:` entry so
+    search-by-citekey still resolves the note) and cited inline in the body.
+    Highlights render as blockquotes; `note`/`text` annotations render as
+    prose, because they are the reader's own thinking rather than source
+    text. Annotations are grouped by page. Re-export refuses to overwrite a
+    note that differs from current output unless explicitly told to —
+    a note in the vault may carry hand edits.
 
 ### Fixed
 
