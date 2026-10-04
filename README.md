@@ -76,7 +76,8 @@ A Zotero plugin that integrates the [Hermes Agent](https://github.com/nousresear
 
 ## Zotero Sandbox Constraints
 
-Zotero plugins run in a **Firefox 115 ESR sandbox** with significant React limitations:
+Zotero plugins run in a **Firefox 140 ESR sandbox** (Zotero 10; was 115 ESR
+under Zotero 9) with significant React limitations:
 
 - **Synthetic events fail** — `onChange`, `onClick`, `onKeyDown` on React elements don't work
 - **Solution** — All user interaction uses native `addEventListener` via refs

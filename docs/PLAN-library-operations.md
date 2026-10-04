@@ -76,9 +76,35 @@ book → bookSection generation with CrossRef chapter lookup + `addRelatedItem`.
 
 ## Workstream D — Agentic tier (later, depends on sidecar)
 
-Sidecar MCP server + tool registration; RAG/DAG/MAG over `Zotero.FullText`;
-batch maintenance jobs with progress/resume; OCR repair; summarise-source-to-
-annotations.
+**Narrowed 2026-10-04.** The sidecar was originally justified by "RAG over the
+library", but whole-library **lexical** search turned out to be available
+in-process: `Zotero.Search` exposes a `fulltextContent` condition backed by a
+real full-text implementation (`searchConditions.js:793`, `search.js:677-696`).
+That half of RAG needs no daemon. The sidecar therefore carries only what the
+plugin genuinely cannot host:
+
+- **Semantic retrieval** — embedding generation and a vector index. This is
+  the real "R" in RAG: finding a passage by meaning, not by keyword.
+- **OCR repair** — an external engine writing a text layer back into an
+  attachment that has none.
+- **Long unattended batch jobs** — progress and resume across hours, where the
+  plugin's UI-bound lifetime is the wrong host.
+
+Sidecar MCP server + tool registration; `summarise-source-to-annotations`
+(which depends on semantic retrieval, not on the daemon itself).
+
+### Sequencing within D
+
+1. **D0 — lexical retrieval (no sidecar).** A `Zotero.Search`-backed
+   full-text query surface over the library. Ships first, because it needs no
+   new infrastructure and unblocks real use.
+2. **D1 — semantic retrieval (sidecar).** Embeddings + vector index over
+   extracted full text. The first genuinely sidecar-dependent capability.
+3. **D2 — OCR repair (sidecar).** Scanned attachments with no text layer.
+4. **D3 — batch maintenance jobs** with progress/resume.
+
+Each tier must degrade gracefully when the sidecar is absent: D0 always works;
+D1–D3 report unavailability rather than failing obscurely.
 
 ## Sequencing
 
@@ -106,5 +132,13 @@ annotations.
   (Tesseract via the sidecar, or a local model) writing a text layer back into
   the attachment — and must not be promised as a plugin capability.
 
-- **`DESIGN.md` conflict** must be resolved before D lands, or the repo's own
-  governance docs will contradict the shipped architecture.
+- **`DESIGN.md` conflict — RESOLVED 2026-10-04.** The design doc claimed
+  _"metadata is provided in context, not discovered"_ and _"context items are
+  the only library access"_. Both were contradicted by shipped code
+  (`LookupManager` discovers from external services; `AnnotationManager`
+  reads the library in-process). Decision taken: **amend the north star to
+  match reality** — discovery and in-process reading are sanctioned; the
+  sidecar becomes additive and is narrowed to embeddings, OCR and long batch
+  work. `DESIGN.md` now carries a **Sidecar Boundary** section stating the
+  tier rules, and a worked **D0 → D3** sequencing. The sidecar is no longer a
+  precondition for Workstream D's first and most useful tier.

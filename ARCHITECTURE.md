@@ -136,7 +136,9 @@ one), preventing Promise leaks on concurrent calls.
   Zotero write, and record persistent entries to `AuditLog`.
 - **Terminal gating:** `terminal_output` updates are dropped unless
   `allowTerminal` is enabled.
-- **Secrets:** API key stored in Zotero prefs, never logged.
+- **Secrets:** credentials (e.g. a Semantic Scholar API key) live in the vault,
+  never in Zotero prefs and never logged. _(Corrected 2026-10-04 — this
+  previously stored the key in Zotero prefs, contradicting the vault decision.)_
 - **No hardcoded paths:** Zotero data/profile dirs resolved at runtime.
 
 ## Testing

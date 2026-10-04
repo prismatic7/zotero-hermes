@@ -14,15 +14,27 @@ with zero context-switching?
 ## Design Principles
 
 1. **Zotero-first context.** The agent answers from the user's actual
-   library — attached items, notes, annotations, tags — never from
-   hallucinated database access. Metadata is provided in context, not
-   discovered.
+   library — attached items, notes, annotations, tags, and full text — never
+   from hallucinated database access. Two access modes are sanctioned:
+   - **Context** — attached items are described in the prompt. Zero cost, and
+     the primary path.
+   - **Discovery** — the plugin may read the library in-process through
+     Zotero's own XPCOM API, and may query external bibliographic services
+     (CrossRef, DataCite, Semantic Scholar) for metadata the library does not
+     contain. Discovery is sanctioned; _invention_ is not. Anything the agent
+     states about the library must trace to a read that actually happened.
+     Verified 2026-10-04: `Zotero.Search` exposes a `fulltextContent` condition
+     backed by a real full-text implementation (`searchConditions.js:793`,
+     `search.js:677-696`), so whole-library lexical search needs no sidecar.
+     Heavier capability — embeddings, OCR, unattended batch work — belongs to
+     the sidecar (see **Sidecar Boundary**).
 2. **Local by default.** ACP/stdio mode spawns the local `hermes` binary.
    The user's data stays on their machine. API mode is opt-in for remote
    gateways.
-3. **Sandbox-aware.** The plugin runs in Zotero's Firefox 115 ESR sandbox.
-   React synthetic events are unreliable; all interaction uses native
-   `addEventListener` via refs. No `dangerouslySetInnerHTML`, no `DOMParser`.
+3. **Sandbox-aware.** The plugin runs in Zotero's Firefox 140 ESR sandbox
+   (Zotero 10; was 115 ESR under Zotero 9). React synthetic events are
+   unreliable; all interaction uses native `addEventListener` via refs. No
+   `dangerouslySetInnerHTML`, no `DOMParser`.
 4. **Human-in-the-loop for writes.** Note creation, annotation writes, and
    tag application route through `ApprovalDialog`. The agent proposes; the
    user disposes.
@@ -65,17 +77,48 @@ HermesChatView (state + orchestration)
   queue, and record persistent entries in `AuditLog`.
 - **Terminal gating** — `terminal_output` updates are blocked unless the
   `allowTerminal` preference is enabled.
-- **Secrets** — the API key lives in Zotero prefs and is never logged.
+- **Secrets** — credentials (API keys for Semantic Scholar or any future
+  service) live in the vault, never in Zotero prefs and never in the audit
+  log. _(Corrected 2026-10-04: this section previously placed the API key in
+  Zotero prefs, which contradicts the vault decision and would have put a
+  secret in a world-readable profile.)_
 - **No hardcoded paths** — Zotero data/profile directories are resolved at
   runtime; no user-specific paths in source.
 
 ## Known Constraints
 
-- Zotero's SQLite database is locked while Zotero runs — the agent cannot
-  read it directly; context items are the only library access.
+- **SQLite is locked to the plugin, but the library is not.** Zotero holds an
+  exclusive lock on `zotero.sqlite` while it runs, so opening the database
+  file directly is not possible — and never was the right approach. Zotero's
+  own XPCOM API is fully available in-process and is how the plugin reads the
+  library. _(Corrected 2026-10-04: this section previously stated "context
+  items are the only library access", which was false — `searchAnnotations`
+  and the `fulltextContent` search condition both read the library directly,
+  and the live-runtime tests exercise that path.)_
 - PDF content extraction requires the PDF to be in Zotero storage.
 - Large conversations may benefit from virtualized scrolling (not yet
   implemented).
+
+## Sidecar Boundary
+
+The sidecar is an **additive** component, not a precondition for reading the
+library. It exists for capability the plugin genuinely cannot host:
+
+| Belongs in the plugin (in-process)           | Belongs in the sidecar                       |
+| -------------------------------------------- | -------------------------------------------- |
+| Reading items, notes, annotations, tags      | Embedding generation / vector index          |
+| Lexical full-text search (`fulltextContent`) | Semantic (meaning-based) retrieval           |
+| Bibliographic lookup (CrossRef/DataCite/S2)  | OCR for scanned PDFs with no text layer      |
+| Single-item writes behind `ApprovalDialog`   | Long unattended batch jobs (progress/resume) |
+
+Two rules keep the boundary honest:
+
+1. **Nothing that works in-process moves to the sidecar** to satisfy an
+   architectural preference. A daemon has a cost — startup, lifecycle, a
+   failure mode — and that cost must buy capability, not tidiness.
+2. **The plugin stays useful with the sidecar absent.** If a feature cannot
+   degrade gracefully when the sidecar is not running, it is in the wrong
+   tier.
 
 ## Open Questions
 

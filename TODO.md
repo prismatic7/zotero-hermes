@@ -584,7 +584,12 @@ All features must follow Zotero Hermes coding conventions.
 
 ### Current Known Constraints & Backlog
 
-1. Zotero SQLite database is locked while Zotero is running — the agent cannot read it directly via fs tools; context items are the library access point.
+1. Zotero's SQLite **file** is locked while Zotero runs, so the database cannot
+   be read directly as a file. The library itself is fully readable in-process
+   through Zotero's XPCOM API — that is how `AnnotationManager.searchAnnotations`
+   and the `fulltextContent` search condition work. _(Corrected 2026-10-04: this
+   previously read "context items are the library access point", which was
+   false.)_
 2. Direct cloud syncing for multi-vault topologies remains a future consideration.
 
 ---
