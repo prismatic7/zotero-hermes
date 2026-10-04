@@ -28,7 +28,7 @@ All notable changes to this project are documented in this file.
   `renderTextSelectionPopup` only fires for existing annotations, not for
   a fresh text selection.
 - **Item context menu could not be unregistered**: `registerMenu`
-  returns the *namespaced* key (`CSS.escape(pluginID + "-" + menuID)`),
+  returns the _namespaced_ key (`CSS.escape(pluginID + "-" + menuID)`),
   so `unregisterMenu` was being called with the bare `menuID` and never
   matched. The returned key is now stored and used on shutdown.
 - **Menu opened the sidebar but the prompt never appeared**: the
