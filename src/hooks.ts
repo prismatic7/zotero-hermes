@@ -36,6 +36,7 @@ import { AuditLog } from "./utils/AuditLog";
 import { getString, initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
+import type { ContextItem } from "./views/types";
 import { mountHermesChat } from "./views/HermesChatView";
 
 async function onStartup() {
@@ -189,134 +190,6 @@ function registerHermesSidebar(win: _ZoteroTypes.MainWindow): void {
         toggleHermesSidebar(win);
       }
 
-      // Register item context menu entry
-      const itemMenu = doc.getElementById("zotero-itemmenu");
-      if (itemMenu && !doc.getElementById("hermes-itemmenu-ask")) {
-        const menuItem = doc.createXULElement("menuitem") as any;
-        menuItem.setAttribute("id", "hermes-itemmenu-ask");
-        menuItem.setAttribute("label", "Ask Hermes About Item");
-        menuItem.setAttribute("class", "menuitem-iconic");
-        menuItem.style.listStyleImage =
-          "url('chrome://hermes/content/icons/hermes-sidenav.svg')";
-        menuItem.addEventListener("command", async () => {
-          const selectedItems =
-            addon.data.hermes?.items.getSelectedItems() || [];
-          if (selectedItems.length > 0 && addon.data.hermes) {
-            for (const it of selectedItems) {
-              await addon.data.hermes.items.attachItem(it);
-            }
-            const toggleBtn = doc.getElementById(
-              "zotero-hermes-tb-chat-toggle",
-            );
-            if (
-              toggleBtn &&
-              toggleBtn.getAttribute("aria-pressed") !== "true"
-            ) {
-              toggleHermesSidebar(win);
-            }
-          }
-        });
-        itemMenu.appendChild(menuItem);
-      }
-
-      // Handler for active reader actions (explain, critique)
-      const handleReaderAction = async (actionType: "explain" | "critique") => {
-        const selection = addon.data.hermes?.items.getActiveReaderSelection();
-        if (!selection || !selection.text) {
-          addon.log("No text selected in active reader");
-          return;
-        }
-        let itemTitle = "the current document";
-        if (selection.item) {
-          await addon.data.hermes?.items.attachItem(selection.item);
-          itemTitle = `"${selection.item.getDisplayTitle()}"`;
-        }
-        const pageStr = selection.page ? ` (page ${selection.page})` : "";
-        let prompt = "";
-        if (actionType === "explain") {
-          prompt = `Please explain the following passage from ${itemTitle}${pageStr}:\n\n> "${selection.text}"\n\nProvide a clear conceptual explanation, define key terminology, and explain why this matters in the context of the work.`;
-        } else {
-          prompt = `Please critically examine and critique the following argument from ${itemTitle}${pageStr}:\n\n> "${selection.text}"\n\nEvaluate its assumptions, logical rigor, evidence strength, and identify potential counter-arguments or edge cases.`;
-        }
-
-        const toggleBtn = doc.getElementById("zotero-hermes-tb-chat-toggle");
-        if (toggleBtn && toggleBtn.getAttribute("aria-pressed") !== "true") {
-          toggleHermesSidebar(win);
-        }
-        win.setTimeout(() => {
-          addon.data.hermes?.chat.dispatchExternalPrompt(prompt);
-        }, 150);
-      };
-
-      // Register reader context menu entries
-      const readerMenu =
-        doc.getElementById("zotero-reader-context") ||
-        doc.getElementById("reader-context-menu");
-      if (readerMenu && !doc.getElementById("hermes-reader-explain")) {
-        const explainItem = doc.createXULElement("menuitem") as any;
-        explainItem.setAttribute("id", "hermes-reader-explain");
-        explainItem.setAttribute("label", "Explain Selection with Hermes");
-        explainItem.setAttribute("class", "menuitem-iconic");
-        explainItem.style.listStyleImage =
-          "url('chrome://hermes/content/icons/hermes-sidenav.svg')";
-        explainItem.addEventListener("command", () => {
-          void handleReaderAction("explain");
-        });
-        readerMenu.appendChild(explainItem);
-
-        const critiqueItem = doc.createXULElement("menuitem") as any;
-        critiqueItem.setAttribute("id", "hermes-reader-critique");
-        critiqueItem.setAttribute("label", "Critique Argument with Hermes");
-        critiqueItem.setAttribute("class", "menuitem-iconic");
-        critiqueItem.style.listStyleImage =
-          "url('chrome://hermes/content/icons/hermes-sidenav.svg')";
-        critiqueItem.addEventListener("command", () => {
-          void handleReaderAction("critique");
-        });
-        readerMenu.appendChild(critiqueItem);
-      }
-
-      // Floating selection popup in PDF Reader
-      try {
-        if (
-          typeof (Zotero as any).Reader?.registerEventListener === "function" &&
-          !(addon as any)._readerEventRegistered
-        ) {
-          (addon as any)._readerEventRegistered = true;
-          (Zotero as any).Reader.registerEventListener(
-            "renderTextSelectionPopup",
-            ({ reader, doc: readerDoc, popup }: any) => {
-              if (
-                !popup ||
-                readerDoc.getElementById("hermes-reader-float-btn")
-              ) {
-                return;
-              }
-              const btn = readerDoc.createElement("button");
-              btn.id = "hermes-reader-float-btn";
-              btn.className = "hermes-reader-popup-btn";
-              btn.textContent = "⚡ Hermes";
-              btn.style.cssText =
-                "font-size: 11px; padding: 2px 6px; margin-left: 4px; border-radius: 4px; background: var(--hermes-accent, #0b6b54); color: white; border: none; cursor: pointer; font-weight: 500;";
-              btn.title = "Explain selection with Hermes";
-              btn.addEventListener("click", () => {
-                const text =
-                  reader._internalReader?._primaryView?._selectedText ||
-                  reader.getSelectedText?.() ||
-                  "";
-                if (!text) return;
-                void handleReaderAction("explain");
-              });
-              popup.appendChild(btn);
-            },
-          );
-        }
-      } catch (err) {
-        addon.log(
-          `Failed to register reader selection popup listener: ${(err as Error).message}`,
-        );
-      }
-
       addon.log("Hermes sidebar toggle button registered successfully");
     }
   } catch (error) {
@@ -324,6 +197,197 @@ function registerHermesSidebar(win: _ZoteroTypes.MainWindow): void {
       `Failed to register Hermes sidebar toggle button: ${(error as Error).message}`,
     );
   }
+}
+
+/**
+ * Open the Hermes sidebar and hand off a prompt.
+ *
+ * The dispatch is *synchronous*: `toggleHermesSidebar` mounts the React
+ * view via `createRoot().render()`, but React 18 renders asynchronously,
+ * so the view's `onExternalPrompt` subscription may not exist yet when
+ * this returns. `ChatManager.dispatchExternalPrompt` buffers the prompt
+ * in that case and replays it on the first subscription — so we do not
+ * depend on a fixed delay racing the mount (the old 200ms timer could
+ * fire before the effect ran, and an empty listener set silently dropped
+ * the prompt: sidebar opened, prompt never appeared).
+ */
+function openSidebarAndPrompt(
+  win: _ZoteroTypes.MainWindow,
+  prompt: string,
+  contextItems?: ContextItem[],
+) {
+  const doc = win.document;
+  const toggleBtn = doc.getElementById("zotero-hermes-tb-chat-toggle");
+  const pressed = toggleBtn?.getAttribute("aria-pressed");
+  if (toggleBtn && pressed !== "true") {
+    toggleHermesSidebar(win);
+  }
+  // Dispatch synchronously. ChatManager buffers the prompt when the
+  // ChatView has not subscribed yet (React's createRoot().render() is
+  // async), replaying it on subscribe — so no timer is needed here.
+  addon.data.hermes?.chat.dispatchExternalPrompt(prompt, contextItems);
+}
+
+/**
+ * Register the "Ask Hermes About Item" library item context menu entry
+ * via Zotero's supported MenuManager API.
+ */
+function registerItemContextMenu(): void {
+  const hermes = addon.data.hermes;
+  if (!hermes) return;
+  hermes.items.registerItemContextMenu(({ titles, contextItems }) => {
+    const win = Zotero.getMainWindow();
+    if (!win) return;
+    openSidebarAndPrompt(
+      win,
+      hermes.items.buildItemPrompt(titles),
+      contextItems,
+    );
+  });
+}
+
+/**
+ * Register the reader text-selection "⚡ Hermes" action.
+ *
+ * Zotero 10 dispatches reader UI events as `CustomEvent({ detail: {
+ * type: "render..." | "create...ContextMenu", append, params, reader }})`
+ * — there is no `popup`/`doc` argument and no `popup.appendChild` step
+ * (verified against Zotero 10.0.5 `resource/reader/reader.js`). The
+ * callback MUST call `append(...)` synchronously or the reader throws.
+ *
+ * The previous implementation destructured `{ reader, doc, popup }` and
+ * called `popup.appendChild(btn)`, so the button was never inserted and
+ * the listener silently did nothing. Also, `renderTextSelectionPopup`
+ * only fires for existing annotations: a fresh selection is only
+ * surfaced through `createViewContextMenu`, so both are registered.
+ */
+function registerReaderActions(): void {
+  const readerAPI = (Zotero as any).Reader;
+  if (
+    !readerAPI ||
+    typeof readerAPI.registerEventListener !== "function" ||
+    (addon as any)._readerEventRegistered
+  ) {
+    return;
+  }
+  (addon as any)._readerEventRegistered = true;
+
+  const pluginID = addon.data.config.addonID;
+
+  // Floating action button in the text-selection popup (shown on hover
+  // over an existing highlight/underline).
+  readerAPI.registerEventListener(
+    "renderTextSelectionPopup",
+    (event: any) => {
+      try {
+        const reader = event.reader;
+        const text = event.params?.annotation?.text || "";
+        if (!text) return;
+        const doc = event.doc || reader?._iframeWindow?.document;
+        if (!doc) return;
+
+        const btn = doc.createElement("button");
+        btn.className = "toolbar-button hermes-reader-popup-btn";
+        btn.textContent = "⚡ Hermes";
+        btn.title = "Explain selection with Hermes";
+        btn.addEventListener("click", () => {
+          void runReaderAction(reader, "explain", {
+            text,
+            page: reader?.state?.pageIndex,
+          });
+        });
+        event.append(btn);
+      } catch (err) {
+        addon.log(
+          `Failed to render reader selection popup button: ${(err as Error).message}`,
+        );
+      }
+    },
+    pluginID,
+  );
+
+  // Right-click "view" menu — the only surface that fires for a plain
+  // text selection that has not yet been turned into an annotation.
+  readerAPI.registerEventListener(
+    "createViewContextMenu",
+    (event: any) => {
+      try {
+        const reader = event.reader;
+        if (!reader) return;
+        const selected = getReaderSelectionText(reader);
+        const makeItem = (label: string, mode: "explain" | "critique") => ({
+          label,
+          onCommand: () => {
+            void runReaderAction(reader, mode, { text: selected });
+          },
+        });
+        event.append(
+          makeItem("Explain Selection with Hermes", "explain"),
+          makeItem("Critique Argument with Hermes", "critique"),
+        );
+      } catch (err) {
+        addon.log(
+          `Failed to render reader context menu: ${(err as Error).message}`,
+        );
+      }
+    },
+    pluginID,
+  );
+}
+
+/**
+ * Read the current text selection inside a reader. `ReaderInstance` has
+ * no `getSelectedText()`; the selection lives in its iframe window.
+ */
+function getReaderSelectionText(reader: any): string {
+  try {
+    const selection = reader?._iframeWindow?.getSelection?.();
+    if (selection && typeof selection.toString === "function") {
+      return selection.toString().trim();
+    }
+  } catch {
+    // ignore
+  }
+  return "";
+}
+
+/**
+ * Attach the item under the reader, open the sidebar, and dispatch the
+ * explain/critique prompt.
+ */
+async function runReaderAction(
+  reader: any,
+  actionType: "explain" | "critique",
+  opts: { text: string; page?: number },
+): Promise<void> {
+  const hermes = addon.data.hermes;
+  if (!hermes) return;
+  const text = opts.text || getReaderSelectionText(reader);
+  if (!text) {
+    addon.log("No text selected in active reader");
+    return;
+  }
+
+  let title: string | undefined;
+  try {
+    if (reader?.itemID) {
+      const item = Zotero.Items.get(reader.itemID);
+      if (item) {
+        await hermes.items.attachItem(item);
+        title = hermes.items.getItemPromptText(item);
+      }
+    }
+  } catch {
+    // ignore — fall back to "the current document"
+  }
+
+  const prompt = hermes.items.buildReaderPrompt(actionType, {
+    text,
+    page: opts.page,
+    title,
+  });
+  const win = Zotero.getMainWindow();
+  if (win) openSidebarAndPrompt(win, prompt);
 }
 
 /**
@@ -445,18 +509,6 @@ function unregisterHermesSidebar(win: Window): void {
     if (separator) {
       separator.parentNode?.removeChild(separator);
     }
-    const menuItem = doc.getElementById("hermes-itemmenu-ask");
-    if (menuItem) {
-      menuItem.parentNode?.removeChild(menuItem);
-    }
-    const explainItem = doc.getElementById("hermes-reader-explain");
-    if (explainItem) {
-      explainItem.parentNode?.removeChild(explainItem);
-    }
-    const critiqueItem = doc.getElementById("hermes-reader-critique");
-    if (critiqueItem) {
-      critiqueItem.parentNode?.removeChild(critiqueItem);
-    }
 
     // 2. Clean up Hermes sidebar panel
     const hermesPane = doc.getElementById("hermes-pane-library") as any;
@@ -525,6 +577,19 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   // Register full-height sidebar and toolbar button
   registerHermesSidebar(win);
 
+  // Register supported context-menu / reader integrations after the
+  // window is ready, so Zotero.MenuManager and Zotero.Reader exist.
+  Zotero.Promise.delay(300).then(() => {
+    try {
+      registerItemContextMenu();
+      registerReaderActions();
+    } catch (err) {
+      addon.log(
+        `Failed to register Hermes menu integrations: ${(err as Error).message}`,
+      );
+    }
+  });
+
   await Zotero.Promise.delay(100);
 
   popupWin.changeLine({
@@ -554,6 +619,15 @@ function onShutdown(): void {
   } catch (error) {
     addon.log(
       `Error disconnecting Hermes client on shutdown: ${(error as Error).message}`,
+    );
+  }
+
+  // Unregister the MenuManager item-context-menu entry.
+  try {
+    addon.data.hermes?.items.unregisterItemContextMenu();
+  } catch (error) {
+    addon.log(
+      `Error unregistering Hermes item context menu: ${(error as Error).message}`,
     );
   }
 

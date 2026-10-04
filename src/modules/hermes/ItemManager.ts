@@ -1,4 +1,5 @@
 import type Addon from "../../addon";
+import type { ContextItem } from "../../views/types";
 
 export interface AttachedItem {
   id: number;
@@ -33,9 +34,42 @@ export interface AttachedItem {
 export class ItemManager {
   private readonly addon: Addon;
   private attachedItems: AttachedItem[] = [];
+  /**
+   * Key returned by `Zotero.MenuManager.registerMenu`, which is the
+   * *namespaced* key (`CSS.escape(pluginID + "-" + menuID)`), not the raw
+   * `menuID`. Stored so `unregisterItemContextMenu` can actually match it.
+   */
+  private itemMenuRegistrationKey: string | false = false;
 
   constructor(addon: Addon) {
     this.addon = addon;
+  }
+
+  /**
+   * Resolve the reader instance for the currently selected tab.
+   *
+   * Zotero exposes `Zotero.Reader.getByTabID(tabID)`; there is no
+   * `Zotero.Reader.getReader()`. Falling back to the first open reader
+   * matches the previous behaviour for single-reader sessions.
+   */
+  public getActiveReader(): any | null {
+    try {
+      const readerAPI = (Zotero as any).Reader;
+      if (!readerAPI) return null;
+
+      const selectedID = (globalThis as any).Zotero_Tabs?.selectedID;
+      if (selectedID && typeof readerAPI.getByTabID === "function") {
+        const byTab = readerAPI.getByTabID(selectedID);
+        if (byTab) return byTab;
+      }
+      const readers = readerAPI._readers;
+      if (Array.isArray(readers) && readers.length > 0) {
+        return readers[0];
+      }
+    } catch {
+      // ignore
+    }
+    return null;
   }
 
   public getActiveReaderSelection(): {
@@ -44,28 +78,36 @@ export class ItemManager {
     item?: Zotero.Item;
   } | null {
     try {
-      const reader =
-        (Zotero as any).Reader?.getReader?.() ||
-        (Zotero as any).Reader?._readers?.find(
-          (r: any) =>
-            r._tab?.id === (globalThis as any).Zotero_Tabs?.selectedID,
-        );
+      const reader = this.getActiveReader();
       if (!reader) return null;
 
-      const text =
-        (typeof reader.getSelectedText === "function" &&
-          reader.getSelectedText()) ||
-        (typeof reader._internalReader?._primaryView?._getSelectionText ===
-          "function" &&
-          reader._internalReader._primaryView._getSelectionText()) ||
-        "";
+      // Zotero 10: selection text lives in the reader's iframe window.
+      // ReaderInstance has NO `getSelectedText()` method (verified against
+      // Zotero 10.0.5) — reading the iframe's Selection is the only source.
+      let text = "";
+      try {
+        const selection = reader._iframeWindow?.getSelection?.();
+        if (selection) {
+          text =
+            typeof selection.toString === "function"
+              ? selection.toString()
+              : "";
+        }
+      } catch {
+        // ignore — fall through to the empty-text guard below
+      }
 
       if (!text || !text.trim()) return null;
 
-      const page =
-        reader._internalReader?._primaryView?._currentPageNumber ||
-        reader.pageIndex ||
-        undefined;
+      let page: number | undefined;
+      try {
+        page =
+          reader._internalReader?._primaryView?._currentPageNumber ??
+          reader.state?.pageIndex ??
+          undefined;
+      } catch {
+        // ignore
+      }
 
       let item: Zotero.Item | undefined;
       if (reader.itemID) {
@@ -80,14 +122,152 @@ export class ItemManager {
     }
   }
 
+  /**
+   * Build the prompt sent when the user asks about library items. Kept
+   * pure so it can be unit-tested without a live Zotero.
+   */
+  public buildItemPrompt(titles: string[], fallback = "this item"): string {
+    const clean = titles.map((t) => t.trim()).filter(Boolean);
+    if (clean.length === 0) {
+      return `Tell me about ${fallback} — give me a brief overview of what it is, its main argument, and how it might relate to my research.`;
+    }
+    if (clean.length === 1) {
+      return `Tell me about "${clean[0]}" — give me a brief overview of what it is, its main argument, and how it might relate to my research.`;
+    }
+    const list = clean.map((t) => `"${t}"`).join(", ");
+    return `Compare and discuss how these works in my library relate to each other: ${list}. Highlight shared themes, tensions, and gaps.`;
+  }
+
+  /**
+   * Build the prompt for a reader explain/critique action. Pure and
+   * testable.
+   */
+  public buildReaderPrompt(
+    actionType: "explain" | "critique",
+    opts: { text: string; page?: number; title?: string },
+  ): string {
+    const { text, page, title } = opts;
+    const itemTitle = title ? `"${title}"` : "the current document";
+    const pageStr = page ? ` (page ${page})` : "";
+    if (actionType === "critique") {
+      return `Please critically examine and critique the following argument from ${itemTitle}${pageStr}:\n\n> "${text}"\n\nEvaluate its assumptions, logical rigor, evidence strength, and identify potential counter-arguments or edge cases.`;
+    }
+    return `Please explain the following passage from ${itemTitle}${pageStr}:\n\n> "${text}"\n\nProvide a clear conceptual explanation, define key terminology, and explain why this matters in the context of the work.`;
+  }
+
+  /**
+   * Register the "Ask Hermes About Item" entry on the library item
+   * context menu.
+   *
+   * Uses Zotero's supported `MenuManager` API (Zotero 8+), which is how
+   * Zotero 10 builds `#zotero-itemmenu` via `updateMenuPopup(..., "main/
+   * library/item")`. The previous implementation appended a `menuitem`
+   * directly to `#zotero-itemmenu`; Zotero 10 hides every child it does
+   * not own, so that item was never shown and the command never fired —
+   * a silent failure.
+   *
+   * @returns true when the menu registered successfully.
+   */
+  public registerItemContextMenu(
+    onAsk: (payload: {
+      items: Zotero.Item[];
+      titles: string[];
+      contextItems: ContextItem[];
+    }) => void,
+  ): boolean {
+    const menuManager = (Zotero as any).MenuManager;
+    if (!menuManager || typeof menuManager.registerMenu !== "function") {
+      this.addon.log(
+        "Ask Hermes About Item not registered: Zotero.MenuManager is unavailable (requires Zotero 8+).",
+      );
+      return false;
+    }
+
+    const addonRef = this.addon.data?.config?.addonRef || "hermes";
+    const pluginID =
+      this.addon.data?.config?.addonID || "hermes@techne-tools.org";
+    const menuID = `${addonRef}-item-context-menu`;
+
+    try {
+      this.itemMenuRegistrationKey = menuManager.registerMenu({
+        menuID,
+        pluginID,
+        target: "main/library/item",
+        menus: [
+          {
+            menuType: "menuitem",
+            l10nID: "hermes-itemmenu-ask",
+            icon: `chrome://${addonRef}/content/icons/hermes-sidenav.svg`,
+            onCommand: async (_event: Event, context: any) => {
+              try {
+                const selected: Zotero.Item[] = (context?.items || []).filter(
+                  (it: any) => it && typeof it.getField === "function",
+                );
+                if (selected.length === 0) {
+                  return;
+                }
+
+                // Populate ItemManager.attachedItems so slash commands
+                // (/annotations, /cite, /tag, /savechat) can resolve the item.
+                // Build context items so the answer stays grounded in the
+                // item's metadata.
+                const titles: string[] = [];
+                const contextItems: ContextItem[] = [];
+                for (const item of selected) {
+                  const attached = await this.attachItem(item);
+                  const title = attached?.title || this.getItemPromptText(item);
+                  titles.push(title);
+                  contextItems.push({
+                    id: `item-${item.id}`,
+                    type: "item",
+                    text: title,
+                    data: item,
+                    extracted: attached,
+                  });
+                }
+                onAsk({ items: selected, titles, contextItems });
+              } catch (err) {
+                this.addon.log(
+                  `Ask Hermes About Item failed: ${(err as Error).message}`,
+                );
+              }
+            },
+          },
+        ],
+      });
+
+      if (this.itemMenuRegistrationKey) {
+        this.addon.log(
+          `Registered item context menu entry "${menuID}" as ${this.itemMenuRegistrationKey}`,
+        );
+        return true;
+      }
+      this.addon.log(`Failed to register item context menu "${menuID}"`);
+      return false;
+    } catch (err) {
+      this.addon.log(
+        `Failed to register item context menu: ${(err as Error).message}`,
+      );
+      return false;
+    }
+  }
+
+  public unregisterItemContextMenu(): void {
+    try {
+      const menuManager = (Zotero as any).MenuManager;
+      const key =
+        this.itemMenuRegistrationKey ||
+        `${this.addon.data?.config?.addonRef || "hermes"}-item-context-menu`;
+      menuManager?.unregisterMenu?.(key);
+      this.itemMenuRegistrationKey = false;
+    } catch {
+      // ignore
+    }
+  }
+
   public getSelectedItems(): Zotero.Item[] {
     try {
-      const reader =
-        (Zotero as any).Reader?.getReader?.() ||
-        (Zotero as any).Reader?._readers?.find(
-          (r: any) =>
-            r._tab?.id === (globalThis as any).Zotero_Tabs?.selectedID,
-        );
+      const reader = this.getActiveReader();
       if (reader && reader.itemID) {
         const item = Zotero.Items.get(reader.itemID);
         if (item) {
@@ -379,6 +559,19 @@ export class ItemManager {
       this.addAttachedItem(attachedItem);
     }
     return attachedItem;
+  }
+
+  /**
+   * Resolve a human-readable title for an item, preferring the extracted
+   * metadata recorded by `attachItem`.
+   */
+  public getItemPromptText(item: Zotero.Item): string {
+    const existing = this.attachedItems.find((a) => a.id === item.id);
+    if (existing?.title) return existing.title;
+    if (typeof (item as any).getDisplayTitle === "function") {
+      return (item as any).getDisplayTitle() || "Untitled";
+    }
+    return (item.getField("title") as string) || "Untitled";
   }
 
   /**

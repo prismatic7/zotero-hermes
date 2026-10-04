@@ -384,3 +384,235 @@ describe("ItemManager.updateItemMetadata", function () {
     expect((item as any).isSaved()).to.be.false;
   });
 });
+
+describe("ItemManager prompt builders", function () {
+  it("builds a single-item overview prompt", function () {
+    const manager = new ItemManager(mockAddon());
+    const prompt = manager.buildItemPrompt(["The Soundscape"]);
+    expect(prompt).to.contain('"The Soundscape"');
+    expect(prompt).to.contain("overview");
+  });
+
+  it("builds a comparison prompt for multiple items", function () {
+    const manager = new ItemManager(mockAddon());
+    const prompt = manager.buildItemPrompt(["A", "B"]);
+    expect(prompt).to.contain('"A"');
+    expect(prompt).to.contain('"B"');
+    expect(prompt).to.contain("Compare");
+  });
+
+  it("falls back when no titles are provided", function () {
+    const manager = new ItemManager(mockAddon());
+    const prompt = manager.buildItemPrompt([], "the selected item");
+    expect(prompt).to.contain("the selected item");
+  });
+
+  it("builds an explain prompt with page and title", function () {
+    const manager = new ItemManager(mockAddon());
+    const prompt = manager.buildReaderPrompt("explain", {
+      text: "the argument",
+      page: 4,
+      title: "Soundscape",
+    });
+    expect(prompt).to.contain('"Soundscape"');
+    expect(prompt).to.contain("(page 4)");
+    expect(prompt).to.contain("the argument");
+    expect(prompt).to.contain("explain");
+  });
+
+  it("builds a critique prompt from the current document when no title", function () {
+    const manager = new ItemManager(mockAddon());
+    const prompt = manager.buildReaderPrompt("critique", { text: "x" });
+    expect(prompt).to.contain("the current document");
+    expect(prompt).to.contain("critique");
+  });
+
+  it("resolves the prompt title from extracted metadata", async function () {
+    const manager = new ItemManager(mockAddon());
+    const item = mockItem({ id: 3, key: "K3", fields: { title: "From Meta" } });
+    await manager.attachItem(item);
+    expect(manager.getItemPromptText(item)).to.equal("From Meta");
+  });
+});
+
+describe("ItemManager.registerItemContextMenu", function () {
+  function stubMenuManager(registerMenu: (opts: any) => any) {
+    const realZotero = (globalThis as any).Zotero;
+    (globalThis as any).__realZotero = realZotero;
+    (globalThis as any).Zotero = {
+      ...realZotero,
+      MenuManager: { registerMenu, unregisterMenu: () => true },
+    };
+  }
+
+  afterEach(function () {
+    if ((globalThis as any).__realZotero) {
+      (globalThis as any).Zotero = (globalThis as any).__realZotero;
+      delete (globalThis as any).__realZotero;
+    }
+  });
+
+  it("registers a menuitem on the library item context menu target", function () {
+    let captured: any = null;
+    stubMenuManager((opts: any) => {
+      captured = opts;
+      return opts.menuID;
+    });
+    const manager = new ItemManager(mockAddon());
+    const ok = manager.registerItemContextMenu(() => {});
+    expect(ok).to.be.true;
+    expect(captured.target).to.equal("main/library/item");
+    expect(captured.menus).to.have.length(1);
+    expect(captured.menus[0].menuType).to.equal("menuitem");
+    expect(captured.menus[0].l10nID).to.equal("hermes-itemmenu-ask");
+    expect(captured.menus[0].icon).to.contain("hermes-sidenav.svg");
+  });
+
+  it("returns false when Zotero.MenuManager is unavailable", function () {
+    const realZotero = (globalThis as any).Zotero;
+    (globalThis as any).__realZotero = realZotero;
+    (globalThis as any).Zotero = { ...realZotero, MenuManager: undefined };
+    const manager = new ItemManager(mockAddon());
+    expect(manager.registerItemContextMenu(() => {})).to.be.false;
+  });
+
+  it("attaches the clicked item and passes grounded context to onAsk", async function () {
+    let captured: any = null;
+    stubMenuManager((opts: any) => {
+      captured = opts;
+      return opts.menuID;
+    });
+    const manager = new ItemManager(mockAddon());
+    let payload: any = null;
+    manager.registerItemContextMenu((p) => {
+      payload = p;
+    });
+
+    const item = mockItem({ id: 5, key: "K5", fields: { title: "Grounded" } });
+    await captured.menus[0].onCommand({}, { items: [item] });
+
+    expect(payload.titles).to.deep.equal(["Grounded"]);
+    expect(payload.contextItems).to.have.length(1);
+    expect(payload.contextItems[0].id).to.equal("item-5");
+    expect(payload.contextItems[0].type).to.equal("item");
+    expect(manager.getAttachedItems()).to.have.length(1);
+  });
+});
+
+describe("ItemManager.getActiveReaderSelection", function () {
+  afterEach(function () {
+    if ((globalThis as any).__realZotero) {
+      (globalThis as any).Zotero = (globalThis as any).__realZotero;
+      delete (globalThis as any).__realZotero;
+    }
+  });
+
+  it("returns the iframe selection text and page", function () {
+    const realZotero = (globalThis as any).Zotero;
+    (globalThis as any).__realZotero = realZotero;
+    const reader = {
+      itemID: 0,
+      _iframeWindow: {
+        getSelection: () => ({ toString: () => "  selected passage  " }),
+      },
+      _internalReader: { _primaryView: { _currentPageNumber: 7 } },
+    };
+    (globalThis as any).Zotero = {
+      ...realZotero,
+      Reader: { _readers: [reader], getByTabID: () => null },
+    };
+
+    const manager = new ItemManager(mockAddon());
+    const sel = manager.getActiveReaderSelection();
+    expect(sel).to.not.be.null;
+    expect(sel?.text).to.equal("selected passage");
+    expect(sel?.page).to.equal(7);
+  });
+
+  it("returns null when there is no selection", function () {
+    const realZotero = (globalThis as any).Zotero;
+    (globalThis as any).__realZotero = realZotero;
+    const reader = {
+      itemID: 0,
+      _iframeWindow: { getSelection: () => null },
+    };
+    (globalThis as any).Zotero = {
+      ...realZotero,
+      Reader: { _readers: [reader], getByTabID: () => null },
+    };
+
+    const manager = new ItemManager(mockAddon());
+    expect(manager.getActiveReaderSelection()).to.be.null;
+  });
+});
+
+/**
+ * Live-runtime integration: these run inside the actual Zotero 10 process
+ * the test harness boots, so they prove the fix against
+ * `Zotero.MenuManager` itself rather than a hand-written mock. If the
+ * MenuManager registration path were wrong (the original silent failure),
+ * `registerMenu` would reject the option and these assertions would fail.
+ */
+describe("ItemManager MenuManager integration (live Zotero runtime)", function () {
+  const TARGET = "main/library/item";
+  const menuOptions = () =>
+    (globalThis as any).Zotero.MenuManager._menuManager.getCustomMenuOptions(
+      TARGET,
+    );
+  const findOurs = () =>
+    menuOptions().find((o: any) =>
+      String(o.menuID).includes("item-context-menu"),
+    );
+
+  after(function () {
+    // Leave no residue in the live MenuManager cache.
+    const existing = findOurs();
+    if (existing) {
+      (globalThis as any).Zotero.MenuManager.unregisterMenu(existing.menuID);
+    }
+  });
+
+  it("registers and unregisters the item context menu against real Zotero.MenuManager", function () {
+    const zotero = (globalThis as any).Zotero;
+    const menuManager = zotero.MenuManager;
+    expect(menuManager, "Zotero.MenuManager exists in Zotero 10").to.exist;
+
+    // Clear any registration left by the plugin's own boot sequence so the
+    // assertion is deterministic.
+    const preexisting = findOurs();
+    if (preexisting) menuManager.unregisterMenu(preexisting.menuID);
+    expect(findOurs(), "clean slate before registering").to.be.undefined;
+
+    const manager = new ItemManager(mockAddon());
+    const ok = manager.registerItemContextMenu(() => {});
+    expect(ok, "registerMenu accepted the option").to.be.true;
+
+    const mine = findOurs();
+    expect(mine, "registration visible in live MenuManager").to.exist;
+    expect(mine.target).to.equal(TARGET);
+    expect(mine.pluginID).to.equal("hermes@techne-tools.org");
+    expect(mine.menus[0].menuType).to.equal("menuitem");
+    expect(mine.menus[0].l10nID).to.equal("hermes-itemmenu-ask");
+
+    // The namespaced-key bug: unregister must use the key registerMenu
+    // returned, not the bare menuID.
+    manager.unregisterItemContextMenu();
+    expect(
+      findOurs(),
+      "unregister removes the registration from live MenuManager",
+    ).to.be.undefined;
+  });
+
+  it("confirms the reader APIs Hermes depends on exist in this runtime", function () {
+    const R = (globalThis as any).Zotero.Reader;
+    expect(R, "Zotero.Reader exists").to.exist;
+    expect(R.getByTabID, "getByTabID (getReader() does not exist)").to.be.a(
+      "function",
+    );
+    expect(R.registerEventListener).to.be.a("function");
+    expect(R._registeredListeners).to.be.an("array");
+    // getByTabID must tolerate an unknown id without throwing, since
+    // getActiveReader() calls it with the selected tab id before falling back.
+    expect(() => R.getByTabID("__hermes_nonexistent_tab__")).to.not.throw();
+  });
+});

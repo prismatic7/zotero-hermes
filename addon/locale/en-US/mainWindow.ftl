@@ -22,3 +22,6 @@ hermes-section-head =
     .label = Hermes Chat
 hermes-section-sidenav =
     .tooltiptext = Open Hermes Chat
+
+hermes-itemmenu-ask =
+    .label = Ask Hermes About Item

@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **"Ask Hermes About Item" failed silently**: the entry was appended
+  directly to `#zotero-itemmenu`. Zotero 10 builds that popup itself and
+  hides every child it does not own, so the item was never shown and the
+  command never fired. Re-registered through Zotero's supported
+  `Zotero.MenuManager.registerMenu({ target: "main/library/item" })` API.
+- **Item context menu now answers from metadata**: clicking the entry
+  builds `ContextItem`s from the selected items and sends them with the
+  prompt, so answers stay grounded in the item's metadata rather than
+  relying on the model knowing the title.
+- **Reader selection actions were dead**: `Zotero.Reader` has no
+  `getReader()` method and `ReaderInstance` has no `getSelectedText()`
+  (verified against Zotero 10.0.5). Selection is now read from the
+  reader's `_iframeWindow` Selection.
+- **Reader popup/context menus never rendered**: the
+  `renderTextSelectionPopup` handler destructured `{ reader, doc, popup }`
+  and called `popup.appendChild()`; Zotero dispatches these as a
+  `CustomEvent` with `{ reader, doc, append, params }` and requires
+  `append(...)`. The handler now uses the real API. A
+  `createViewContextMenu` handler was added because
+  `renderTextSelectionPopup` only fires for existing annotations, not for
+  a fresh text selection.
+- **Item context menu could not be unregistered**: `registerMenu`
+  returns the *namespaced* key (`CSS.escape(pluginID + "-" + menuID)`),
+  so `unregisterMenu` was being called with the bare `menuID` and never
+  matched. The returned key is now stored and used on shutdown.
+- **Menu opened the sidebar but the prompt never appeared**: the
+  dispatch was deferred with a fixed 200 ms timer, but React 18's
+  `createRoot().render()` is asynchronous — the timer could fire before
+  `HermesChatView`'s `onExternalPrompt` subscription effect ran, and an
+  empty listener set silently dropped the prompt. `ChatManager` now
+  buffers prompts dispatched with no subscriber (capped at 20) and
+  replays them on the first subscription; the hand-off is synchronous
+  and no longer depends on a delay racing the mount.
+
 ## [0.3.3] — 2026-09-18
 
 ### Added

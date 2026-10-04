@@ -1,6 +1,6 @@
 import type Addon from "../../addon";
 import type { Conversation } from "./ConversationManager";
-import { ChatMessage } from "../../views/types";
+import { ChatMessage, ContextItem } from "../../views/types";
 
 /**
  * Manages chat conversations and state for Hermes Agent.
@@ -92,10 +92,42 @@ export class ChatManager {
     }
   }
 
-  private externalPromptListeners: Array<(prompt: string) => void> = [];
+  private externalPromptListeners: Array<
+    (prompt: string, contextItems?: ContextItem[]) => void
+  > = [];
 
-  public onExternalPrompt(callback: (prompt: string) => void): () => void {
+  /**
+   * Prompts dispatched before the React view has subscribed. React 18's
+   * `createRoot().render()` is asynchronous, so a menu/reader action that
+   * fires a prompt during (or shortly after) the sidebar toggle can beat
+   * the subscription effect in HermesChatView. Without a buffer the
+   * prompt was silently dropped — the sidebar opened with nothing in it.
+   * Capped so an unattended dispatch cannot grow unbounded.
+   */
+  private pendingExternalPrompts: Array<{
+    prompt: string;
+    contextItems?: ContextItem[];
+  }> = [];
+  private readonly MAX_PENDING_PROMPTS = 20;
+
+  public onExternalPrompt(
+    callback: (prompt: string, contextItems?: ContextItem[]) => void,
+  ): () => void {
     this.externalPromptListeners.push(callback);
+    // Replay anything dispatched before this subscriber existed.
+    if (this.pendingExternalPrompts.length > 0) {
+      const pending = this.pendingExternalPrompts;
+      this.pendingExternalPrompts = [];
+      for (const p of pending) {
+        try {
+          callback(p.prompt, p.contextItems);
+        } catch (err) {
+          this.addon.log(
+            `Error replaying external prompt: ${(err as Error).message}`,
+          );
+        }
+      }
+    }
     return () => {
       this.externalPromptListeners = this.externalPromptListeners.filter(
         (cb) => cb !== callback,
@@ -103,15 +135,36 @@ export class ChatManager {
     };
   }
 
-  public dispatchExternalPrompt(prompt: string): void {
+  /**
+   * Dispatch a prompt from outside the React tree (item context menu,
+   * reader actions). Optionally carries pre-built context items so the
+   * prompt stays grounded in the item's metadata.
+   *
+   * @returns the number of subscribers the prompt reached synchronously;
+   *   0 means no ChatView subscriber existed yet and it was buffered for
+   *   the next one (see `pendingExternalPrompts`).
+   */
+  public dispatchExternalPrompt(
+    prompt: string,
+    contextItems?: ContextItem[],
+  ): number {
+    if (this.externalPromptListeners.length === 0) {
+      this.pendingExternalPrompts.push({ prompt, contextItems });
+      if (this.pendingExternalPrompts.length > this.MAX_PENDING_PROMPTS) {
+        this.pendingExternalPrompts.shift();
+      }
+      this.addon.log("External prompt buffered — no ChatView subscriber yet");
+      return 0;
+    }
     for (const listener of this.externalPromptListeners) {
       try {
-        listener(prompt);
+        listener(prompt, contextItems);
       } catch (err) {
         this.addon.log(
           `Error in externalPrompt listener: ${(err as Error).message}`,
         );
       }
     }
+    return this.externalPromptListeners.length;
   }
 }

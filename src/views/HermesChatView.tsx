@@ -229,11 +229,23 @@ export function HermesChatViewComponent({ addon }: HermesChatViewProps) {
    * - connects the client if needed, then streams via client.sendPrompt
    */
   const performSend = useCallback(
-    async (text: string, truncateToIndex?: number) => {
+    async (text: string, truncateToIndex?: number, items?: ContextItem[]) => {
       const st = stateRef.current;
       const streamingMessageId = generateMessageId();
       streamingMessageIdRef.current = streamingMessageId;
       reasoningMessageIdRef.current = null;
+
+      if (items && items.length > 0) {
+        // Merge context (e.g. from the item context menu) into the bar,
+        // deduping by id, and send from the merged set rather than the
+        // possibly-stale state snapshot.
+        const merged = [
+          ...st.contextItems,
+          ...items.filter((n) => !st.contextItems.some((p) => p.id === n.id)),
+        ];
+        setContextItems(merged);
+        st.contextItems = merged;
+      }
 
       const userMessage: ChatMessage = {
         id: generateMessageId(),
@@ -348,9 +360,9 @@ export function HermesChatViewComponent({ addon }: HermesChatViewProps) {
   );
 
   const sendToHermes = useCallback(
-    async (text: string) => {
+    async (text: string, items?: ContextItem[]) => {
       addon.log("[ChatView] sendToHermes called with text:", text.slice(0, 60));
-      await performSend(text);
+      await performSend(text, undefined, items);
     },
     [performSend, addon],
   );
@@ -974,11 +986,12 @@ export function HermesChatViewComponent({ addon }: HermesChatViewProps) {
 
   // Subscribe to external prompts dispatched from Reader / Context Menu
   useEffect(() => {
-    const unsub = hermes.chat.onExternalPrompt((promptText) => {
-      void sendToHermes(promptText);
+    addon.log("[ChatView] subscribing to external prompts");
+    const unsub = hermes.chat.onExternalPrompt((promptText, contextItems) => {
+      void sendToHermes(promptText, contextItems);
     });
     return unsub;
-  }, [hermes.chat, sendToHermes]);
+  }, [hermes.chat, sendToHermes, addon]);
 
   useEffect(() => {
     const win = Zotero.getMainWindow();
