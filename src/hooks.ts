@@ -411,6 +411,45 @@ function toggleHermesSidebar(win: _ZoteroTypes.MainWindow): void {
 
     let hermesPane = doc.getElementById("hermes-pane-library") as any;
 
+    /**
+     * Zotero clamps a collapsed pane to 37px:
+     *   item-pane{min-width:var(--width-available-item-pane,357px)}
+     *   item-pane[collapsed=true]{min-width:37px;max-width:37px}
+     * The Hermes sidebar mounts *inside* item-pane, so mounting while the pane
+     * is collapsed renders it as a sliver (measured: clientWidth 37px). The
+     * pane must be expanded first, and the user's choice restored on close.
+     *
+     * This mirrors Zotero's own `unserializePersist()` idiom — clear the
+     * `collapsed` attribute, reset the splitter, then set `width`/`height`
+     * attributes, which `item-pane.attributeChangedCallback` turns into inline
+     * styles. Driving attributes rather than the `collapsed` accessor means
+     * this does not depend on `setPaneCollapsed()` resolving the pane through
+     * its `closest('splitter + *')` lookup.
+     */
+    const wasCollapsed = itemPane.getAttribute("collapsed") === "true";
+    const setItemPaneCollapsed = (collapsed: boolean) => {
+      const splitter = itemPane.previousElementSibling as any;
+      if (collapsed) {
+        itemPane.setAttribute("collapsed", "true");
+        itemPane.removeAttribute("width");
+        itemPane.removeAttribute("height");
+        itemPane.style.width = "";
+        itemPane.style.height = "";
+        if (splitter) {
+          splitter.setAttribute("state", "collapsed");
+          splitter.setAttribute("substate", "after");
+        }
+      } else {
+        itemPane.removeAttribute("collapsed");
+        if (splitter) splitter.setAttribute("state", "");
+        // Zotero's own minimums (itemPane.handleResize): 337 x 205.
+        itemPane.setAttribute("width", "337");
+        itemPane.setAttribute("height", "205");
+        itemPane.style.width = "337px";
+        itemPane.style.height = "205px";
+      }
+    };
+
     if (!isPressed) {
       // 1. Deactivate Beaver if active to avoid collisions
       const beaverToggle = doc.getElementById("zotero-beaver-tb-chat-toggle");
@@ -421,7 +460,9 @@ function toggleHermesSidebar(win: _ZoteroTypes.MainWindow): void {
         (beaverToggle as any).click();
       }
 
-      // 2. Hide default Zotero details panel & vertical sidenav tabs
+      // 2. Expand the item pane so the sidebar has real width, then hide the
+      //    default Zotero details panel & vertical sidenav tabs.
+      setItemPaneCollapsed(false);
       deck.style.display = "none";
       sidenav.style.display = "none";
 
@@ -429,15 +470,23 @@ function toggleHermesSidebar(win: _ZoteroTypes.MainWindow): void {
       if (!hermesPane) {
         hermesPane = doc.createXULElement("vbox") as any;
         hermesPane.setAttribute("id", "hermes-pane-library");
-        hermesPane.className = "display-flex flex-1 h-full min-w-0";
-        hermesPane.style.minWidth = "0px";
+        // Explicit styles, not utility classes: `display-flex`, `flex-1`,
+        // `h-full` and `min-w-0` are Tailwind-era leftovers that are not
+        // defined in any Zotero stylesheet (grepped all 237 of them), so the
+        // class matched nothing.
+        hermesPane.style.display = "flex";
+        hermesPane.style.flexDirection = "column";
+        hermesPane.style.flex = "1 1 auto";
         hermesPane.style.width = "100%";
+        hermesPane.style.height = "100%";
+        hermesPane.style.minWidth = "0px";
+        hermesPane.style.minHeight = "0px";
 
         const reactContainer = doc.createElement("div") as any;
         reactContainer.setAttribute("id", "hermes-react-root");
         reactContainer.setAttribute(
           "style",
-          "width: 100%; height: 100%; display: flex; flex-direction: column;",
+          "width: 100%; height: 100%; display: flex; flex-direction: column; min-width: 0; min-height: 0;",
         );
 
         hermesPane.appendChild(reactContainer);
@@ -484,6 +533,11 @@ function toggleHermesSidebar(win: _ZoteroTypes.MainWindow): void {
       }
       deck.style.display = "";
       sidenav.style.display = "";
+      // Restore the pane's collapse state as the user left it, so closing
+      // Hermes does not silently re-expand a pane they had collapsed.
+      if (wasCollapsed) {
+        setItemPaneCollapsed(true);
+      }
       btn.setAttribute("aria-pressed", "false");
       addon.log("Hermes full sidebar view toggled OFF");
     }
@@ -535,6 +589,21 @@ function unregisterHermesSidebar(win: Window): void {
     const sidenav = doc.getElementById("zotero-view-item-sidenav") as any;
     if (sidenav) {
       sidenav.style.display = "";
+    }
+    // The pane was force-expanded to give the sidebar width; collapse it again
+    // so disabling the plugin does not leave Zotero's layout altered.
+    const itemPane = doc.getElementById("zotero-item-pane") as any;
+    if (itemPane && itemPane.getAttribute("collapsed") !== "true") {
+      const splitter = itemPane.previousElementSibling as any;
+      itemPane.setAttribute("collapsed", "true");
+      itemPane.removeAttribute("width");
+      itemPane.removeAttribute("height");
+      itemPane.style.width = "";
+      itemPane.style.height = "";
+      if (splitter) {
+        splitter.setAttribute("state", "collapsed");
+        splitter.setAttribute("substate", "after");
+      }
     }
     addon.log("Hermes sidebar fully cleaned up and Zotero layout restored");
   } catch (error) {
