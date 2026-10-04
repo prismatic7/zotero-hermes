@@ -28,6 +28,7 @@ import { CitationManager } from "./modules/hermes/CitationManager";
 import { AnnotationManager } from "./modules/hermes/AnnotationManager";
 import { ApprovalDialog } from "./modules/hermes/ApprovalDialog";
 import { TagManager } from "./modules/hermes/TagManager";
+import { LookupManager } from "./modules/hermes/LookupManager";
 import { ConversationManager } from "./modules/hermes/ConversationManager";
 import { PreferencesManager } from "./modules/hermes/PreferencesManager";
 import { ExportManager } from "./modules/hermes/ExportManager";
@@ -75,6 +76,7 @@ async function onStartup() {
     const citations = new CitationManager(addon);
     const annotations = new AnnotationManager(addon);
     const tags = new TagManager(addon, approvalDialog);
+    const lookups = new LookupManager(addon);
     const conversations = new ConversationManager(addon);
     const exports = new ExportManager(addon);
 
@@ -86,6 +88,7 @@ async function onStartup() {
       citations,
       annotations,
       tags,
+      lookups,
       conversations,
       preferences,
       approvalDialog,

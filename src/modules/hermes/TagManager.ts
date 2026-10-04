@@ -1,7 +1,26 @@
 import type Addon from "../../addon";
+import {
+  runWrite,
+  type WriteContext,
+  type WriteResult,
+} from "../../utils/writeGate";
+
+export interface BulkTagResult extends WriteResult {
+  /** Number of items the tags were actually applied to. */
+  updated: number;
+  /** Items that could not be written (locked, deleted, or not loaded). */
+  failed: number;
+  /** Tag names that no longer exist anywhere in the library. */
+  missing?: string[];
+}
 
 /**
  * Manages tag operations and suggestions for Hermes Agent.
+ *
+ * All mutations route through `runWrite` so approval and audit behave the same
+ * way here as everywhere else. The legacy single-item methods keep their
+ * original contracts (throw on user rejection) so existing callers and tests
+ * are unaffected; the bulk methods return an outcome instead.
  */
 export class TagManager {
   private readonly addon: Addon;
@@ -10,6 +29,17 @@ export class TagManager {
   constructor(addon: Addon, approvalDialog?: any) {
     this.addon = addon;
     this.approvalDialog = approvalDialog;
+  }
+
+  /** The write-gate context, resolved lazily so tests can pass a light addon. */
+  private writeContext(): WriteContext {
+    const hermes = this.addon?.data?.hermes as any;
+    return {
+      approvalDialog: this.approvalDialog ?? hermes?.approvalDialog ?? null,
+      auditLog: hermes?.auditLog ?? null,
+      log: (message: string, ...data: unknown[]) =>
+        this.addon?.log?.(message, ...data),
+    };
   }
 
   public async getAllTags(): Promise<Array<{ tag: string; count: number }>> {
@@ -27,75 +57,131 @@ export class TagManager {
   }
 
   public async addTags(itemID: number, tags: string[]): Promise<void> {
-    const item = await Zotero.Items.getAsync(itemID);
-    if (!item) return;
-
-    const title = (item as any).getDisplayTitle?.() || `Item ${itemID}`;
-    const displayName = `Add tags to "${title}": ${tags.join(", ")}`;
-    const approvalDialog =
-      this.approvalDialog || (this.addon?.data?.hermes as any)?.approvalDialog;
-    if (approvalDialog) {
-      const changeId = `tag-add-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      const approved = await approvalDialog.addPendingChange({
-        action: "modify",
-        id: changeId,
-        newContent: `Add tags: ${tags.join(", ")}`,
-        path: displayName,
-        status: "pending",
-        timestamp: Date.now(),
-      });
-      if (!approved) {
-        throw new Error("Tag addition cancelled by user.");
-      }
+    const result = await this.applyTagsToItems([itemID], tags, "add");
+    if (result.status === "rejected") {
+      throw new Error("Tag addition cancelled by user.");
     }
-
-    for (const tag of tags) {
-      item.addTag(tag);
+    if (result.status === "failed") {
+      throw new Error(result.error || "Tag addition failed.");
     }
-    await item.saveTx();
-
-    this.addon.data?.hermes?.auditLog?.record(
-      "file_change",
-      displayName,
-      "success",
-      { action: "modify", itemID, tags },
-    );
   }
 
   public async removeTags(itemID: number, tags: string[]): Promise<void> {
-    const item = await Zotero.Items.getAsync(itemID);
-    if (!item) return;
-
-    const title = (item as any).getDisplayTitle?.() || `Item ${itemID}`;
-    const displayName = `Remove tags from "${title}": ${tags.join(", ")}`;
-    const approvalDialog =
-      this.approvalDialog || (this.addon?.data?.hermes as any)?.approvalDialog;
-    if (approvalDialog) {
-      const changeId = `tag-rm-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      const approved = await approvalDialog.addPendingChange({
-        action: "modify",
-        id: changeId,
-        newContent: `Remove tags: ${tags.join(", ")}`,
-        path: displayName,
-        status: "pending",
-        timestamp: Date.now(),
-      });
-      if (!approved) {
-        throw new Error("Tag removal cancelled by user.");
-      }
+    const result = await this.applyTagsToItems([itemID], tags, "remove");
+    if (result.status === "rejected") {
+      throw new Error("Tag removal cancelled by user.");
     }
-
-    for (const tag of tags) {
-      item.removeTag(tag);
+    if (result.status === "failed") {
+      throw new Error(result.error || "Tag removal failed.");
     }
-    await item.saveTx();
+  }
 
-    this.addon.data?.hermes?.auditLog?.record(
-      "file_change",
-      displayName,
-      "success",
-      { action: "modify", itemID, tags },
+  /**
+   * Add or remove tags across many items behind a single approval.
+   *
+   * Bulk tag work is the common case in a real library ("everything in this
+   * collection is `theory/affect`"), and doing it one dialog at a time is
+   * unusable past a handful of items.
+   */
+  public async applyTagsToItems(
+    itemIDs: number[],
+    tags: string[],
+    mode: "add" | "remove",
+  ): Promise<BulkTagResult> {
+    const cleanTags = Array.from(
+      new Set(tags.map((t) => t.trim()).filter(Boolean)),
     );
+    const ids = itemIDs.filter((id) => Number.isInteger(id) && id > 0);
+
+    if (cleanTags.length === 0) {
+      return {
+        status: "failed",
+        error: "No tags supplied.",
+        updated: 0,
+        failed: 0,
+      };
+    }
+    if (ids.length === 0) {
+      return {
+        status: "failed",
+        error: "No items supplied.",
+        updated: 0,
+        failed: 0,
+      };
+    }
+
+    const verb = mode === "add" ? "Add" : "Remove";
+    const sign = mode === "add" ? "+" : "−";
+    let updated = 0;
+    let failed = 0;
+
+    const target = await this.describeItems(ids);
+
+    const outcome = await runWrite(this.writeContext(), {
+      action: `${verb} tags`,
+      target,
+      changes: cleanTags.map((t) => `${sign} ${t}`),
+      metadata: { itemIDs: ids, tags: cleanTags, mode },
+      apply: async () => {
+        for (const id of ids) {
+          try {
+            const item = await Zotero.Items.getAsync(id);
+            if (!item) {
+              failed += 1;
+              continue;
+            }
+            for (const tag of cleanTags) {
+              if (mode === "add") item.addTag(tag);
+              else item.removeTag(tag);
+            }
+            await item.saveTx();
+            updated += 1;
+          } catch (error) {
+            failed += 1;
+            this.addon.log?.(
+              `[tags] item ${id} ${mode} failed: ${(error as Error).message}`,
+            );
+          }
+        }
+      },
+    });
+
+    return {
+      status: outcome.status,
+      error: outcome.error,
+      updated,
+      failed,
+    };
+  }
+
+  /**
+   * Add many tags to many items in one approval — the "batch tag" operation.
+   */
+  public async bulkAddTags(
+    itemIDs: number[],
+    tags: string[],
+  ): Promise<BulkTagResult> {
+    return this.applyTagsToItems(itemIDs, tags, "add");
+  }
+
+  public async bulkRemoveTags(
+    itemIDs: number[],
+    tags: string[],
+  ): Promise<BulkTagResult> {
+    return this.applyTagsToItems(itemIDs, tags, "remove");
+  }
+
+  /**
+   * Report which of the given tags actually exist in the library.
+   *
+   * Used to flag typos before a bulk operation, rather than silently creating a
+   * new near-duplicate tag (which is how a library ends up with both
+   * "sonic studies" and "sound studies").
+   */
+  public async findMissingTags(tags: string[]): Promise<string[]> {
+    const all = await this.getAllTags();
+    const known = new Set(all.map((t) => t.tag.toLowerCase()));
+    return tags.filter((t) => t.trim() && !known.has(t.trim().toLowerCase()));
   }
 
   public async suggestTags(
@@ -148,6 +234,38 @@ export class TagManager {
     return suggestions.sort((a, b) => b.confidence - a.confidence);
   }
 
+  /**
+   * Describe the target items for the approval dialog.
+   *
+   * The user is approving a mutation, so they must see *which* items it
+   * touches. A bare count ("3 item(s)") hides that, which is exactly the
+   * property the approval gate exists to provide. Titles are truncated and
+   * the list is capped so a 500-item bulk edit does not produce a wall of text.
+   */
+  private async describeItems(ids: number[]): Promise<string> {
+    const MAX_LISTED = 3;
+    const titles: string[] = [];
+
+    for (const id of ids.slice(0, MAX_LISTED)) {
+      try {
+        const item = await Zotero.Items.getAsync(id);
+        const title =
+          (item as any)?.getDisplayTitle?.() ||
+          (item as any)?.getField?.("title") ||
+          "";
+        if (title) titles.push(`"${String(title).slice(0, 60)}"`);
+      } catch {
+        // A failed lookup still has to produce a describable target.
+      }
+    }
+
+    if (titles.length === 0) return `${ids.length} item(s)`;
+
+    const extra = ids.length - titles.length;
+    const suffix = extra > 0 ? ` and ${extra} more` : "";
+    return `${titles.join(", ")}${suffix}`;
+  }
+
   private escapeRegExp(str: string): string {
     return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
@@ -189,47 +307,34 @@ export class TagManager {
       return 0;
     }
 
-    const displayName = `Merge/rename tag "${trimmedOld}" → "${trimmedNew}" on ${itemsToProcess.length} item(s)`;
-    const approvalDialog =
-      this.approvalDialog || (this.addon?.data?.hermes as any)?.approvalDialog;
-    if (approvalDialog) {
-      const changeId = `tag-rename-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      const approved = await approvalDialog.addPendingChange({
-        action: "modify",
-        id: changeId,
-        newContent: `Rename tag "${trimmedOld}" to "${trimmedNew}" across ${itemsToProcess.length} item(s)`,
-        path: displayName,
-        status: "pending",
-        timestamp: Date.now(),
-      });
-      if (!approved) {
-        throw new Error("Tag rename cancelled by user.");
-      }
-    }
-
     let updatedCount = 0;
-    for (const item of itemsToProcess) {
-      try {
-        item.removeTag(trimmedOld);
-        item.addTag(trimmedNew);
-        await item.saveTx();
-        updatedCount++;
-      } catch (e) {
-        this.addon.log(`TagManager: Error updating item ${item.id}:`, e);
-      }
-    }
 
-    this.addon.data?.hermes?.auditLog?.record(
-      "file_change",
-      displayName,
-      "success",
-      {
-        action: "modify",
+    const outcome = await runWrite(this.writeContext(), {
+      action: "Rename tag",
+      target: `"${trimmedOld}" → "${trimmedNew}" on ${itemsToProcess.length} item(s)`,
+      changes: [`− ${trimmedOld}`, `+ ${trimmedNew}`],
+      metadata: {
         oldTag: trimmedOld,
         newTag: trimmedNew,
-        updatedCount,
+        itemIDs: itemsToProcess.map((i) => i.id),
       },
-    );
+      apply: async () => {
+        for (const item of itemsToProcess) {
+          try {
+            item.removeTag(trimmedOld);
+            item.addTag(trimmedNew);
+            await item.saveTx();
+            updatedCount++;
+          } catch (e) {
+            this.addon.log(`TagManager: Error updating item ${item.id}:`, e);
+          }
+        }
+      },
+    });
+
+    if (outcome.status === "rejected") {
+      throw new Error("Tag rename cancelled by user.");
+    }
 
     return updatedCount;
   }

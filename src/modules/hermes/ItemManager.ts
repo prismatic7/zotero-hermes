@@ -1,5 +1,11 @@
 import type Addon from "../../addon";
 import type { ContextItem } from "../../views/types";
+import {
+  runWrite,
+  trashItems as trashItemsTx,
+  type WriteContext,
+  type WriteResult,
+} from "../../utils/writeGate";
 
 export interface AttachedItem {
   id: number;
@@ -617,52 +623,61 @@ export class ItemManager {
   }
 
   /**
-   * Update metadata fields on a Zotero library item.
-   * Gated through ApprovalDialog for user confirmation and recorded in AuditLog.
+   * Protected fields that must never be touched by an agent-driven update.
+   * `deleted` is on the list because trashing is a separate, deliberate
+   * operation (`metadataDeleteValue` / `trashItems`), not a field write.
    */
-  public async updateItemMetadata(
-    itemID: number,
-    updates: Record<string, any>,
-  ): Promise<boolean> {
-    const item = await Zotero.Items.getAsync(itemID);
-    if (!item) {
-      throw new Error(`Item with ID ${itemID} not found.`);
-    }
+  private static readonly PROTECTED_FIELDS = new Set([
+    "id",
+    "key",
+    "libraryID",
+    "version",
+    "itemTypeID",
+    "itemType",
+    "dateAdded",
+    "dateModified",
+    "deleted",
+  ]);
 
-    const PROTECTED_FIELDS = new Set([
-      "id",
-      "key",
-      "libraryID",
-      "version",
-      "itemTypeID",
-      "itemType",
-      "dateAdded",
-      "dateModified",
-      "deleted",
-    ]);
+  private static readonly FIELD_ALIASES: Record<string, string> = {
+    abstract: "abstractNote",
+    doi: "DOI",
+    publication: "publicationTitle",
+    journal: "publicationTitle",
+    isbn: "ISBN",
+    issn: "ISSN",
+    url: "url",
+    title: "title",
+    date: "date",
+    language: "language",
+    pages: "pages",
+    volume: "volume",
+    issue: "issue",
+    publisher: "publisher",
+    place: "place",
+  };
 
-    const FIELD_ALIASES: Record<string, string> = {
-      abstract: "abstractNote",
-      doi: "DOI",
-      publication: "publicationTitle",
-      journal: "publicationTitle",
-      isbn: "ISBN",
-      issn: "ISSN",
-    };
-
-    const cleanUpdates: Record<string, any> = {};
+  /**
+   * Normalise a caller-supplied field map: resolve aliases, drop protected
+   * fields, and discard empty keys. Shared by the single-item and bulk paths.
+   */
+  private cleanFieldUpdates(updates: Record<string, any>): Record<string, any> {
+    const clean: Record<string, any> = {};
     for (const [key, val] of Object.entries(updates)) {
-      const field = FIELD_ALIASES[key.toLowerCase()] || key;
-      if (!PROTECTED_FIELDS.has(field) && !PROTECTED_FIELDS.has(key)) {
-        cleanUpdates[field] = val;
-      }
+      if (key.trim() === "") continue;
+      const field = ItemManager.FIELD_ALIASES[key.toLowerCase()] || key.trim();
+      if (ItemManager.PROTECTED_FIELDS.has(field)) continue;
+      if (ItemManager.PROTECTED_FIELDS.has(key)) continue;
+      clean[field] = val;
     }
+    return clean;
+  }
 
-    if (Object.keys(cleanUpdates).length === 0) {
-      return false;
-    }
-
-    // Build diff for approval dialog
+  /** Build the approval-dialog diff lines for a set of field updates. */
+  private buildMetadataDiff(
+    item: Zotero.Item,
+    cleanUpdates: Record<string, any>,
+  ): string[] {
     const diffLines: string[] = [];
     for (const [field, newVal] of Object.entries(cleanUpdates)) {
       if (field === "creators") {
@@ -676,79 +691,325 @@ export class ItemManager {
               )
               .join(", ")
           : String(newVal);
-        diffLines.push(`Creators: "${oldCreators}" -> "${newCreatorsStr}"`);
+        diffLines.push(`creators: "${oldCreators}" → "${newCreatorsStr}"`);
       } else {
         const oldVal = (item.getField(field as any) as string) || "(empty)";
-        diffLines.push(`${field}: "${oldVal}" -> "${newVal}"`);
+        diffLines.push(`${field}: "${oldVal}" → "${newVal}"`);
       }
     }
+    return diffLines;
+  }
 
-    const displayName = (item as any).getDisplayTitle?.() || `Item ${itemID}`;
-    const approvalDialog = (this.addon.data?.hermes as any)?.approvalDialog;
-    if (approvalDialog) {
-      const changeId = `meta-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      const approved = await approvalDialog.addPendingChange({
-        action: "modify",
-        id: changeId,
-        newContent: diffLines.join("\n"),
-        path: `Metadata for "${displayName}"`,
-        status: "pending",
-        timestamp: Date.now(),
-      });
-      if (!approved) {
-        throw new Error("Metadata update cancelled by user.");
-      }
-    }
-
-    // Apply updates
+  /** Apply a cleaned field map to an item and persist it. */
+  private applyFieldUpdates(
+    item: Zotero.Item,
+    cleanUpdates: Record<string, any>,
+  ): void {
     for (const [field, val] of Object.entries(cleanUpdates)) {
       if (field === "creators") {
         if (Array.isArray(val)) {
-          const parsedCreators = val.map((c) => {
-            if (typeof c === "object" && c !== null) {
-              return {
-                creatorType: (c as any).creatorType || "author",
-                ...c,
-              };
-            }
-            const str = String(c).trim();
-            const parts = str.split(/\s+/);
-            if (parts.length === 1) {
-              return {
-                lastName: parts[0],
-                firstName: "",
-                creatorType: "author",
-              };
-            }
-            const lastName = parts.pop()!;
-            const firstName = parts.join(" ");
-            return { firstName, lastName, creatorType: "author" };
-          });
-          item.setCreators(parsedCreators);
+          item.setCreators(this.parseCreators(val));
         }
       } else {
         item.setField(field as any, String(val));
       }
     }
+  }
 
-    await item.saveTx();
-
-    // Update in-memory attached items if present
-    const existingIndex = this.attachedItems.findIndex((a) => a.id === itemID);
-    if (existingIndex !== -1) {
-      const updated = await this.extractItemData(item);
-      if (updated) {
-        this.attachedItems[existingIndex] = updated;
+  /** Parse creator input in either object or "First Last" string form. */
+  private parseCreators(val: any[]): any[] {
+    return val.map((c) => {
+      if (typeof c === "object" && c !== null) {
+        return { creatorType: (c as any).creatorType || "author", ...c };
       }
+      const str = String(c).trim();
+      const parts = str.split(/\s+/);
+      if (parts.length === 1) {
+        return { lastName: parts[0], firstName: "", creatorType: "author" };
+      }
+      const lastName = parts.pop()!;
+      const firstName = parts.join(" ");
+      return { firstName, lastName, creatorType: "author" };
+    });
+  }
+
+  /** Refresh the in-memory attached-items cache after a mutation. */
+  private async refreshAttachedItem(item: Zotero.Item): Promise<void> {
+    const existingIndex = this.attachedItems.findIndex((a) => a.id === item.id);
+    if (existingIndex === -1) return;
+    const updated = await this.extractItemData(item);
+    if (updated) {
+      this.attachedItems[existingIndex] = updated;
+    }
+  }
+
+  /** The write-gate context, resolved lazily so tests can pass a light addon. */
+  private writeContext(): WriteContext {
+    const hermes = this.addon.data?.hermes as any;
+    return {
+      approvalDialog: hermes?.approvalDialog ?? null,
+      auditLog: hermes?.auditLog ?? null,
+      log: (message: string, ...data: unknown[]) =>
+        this.addon.log?.(message, ...data),
+    };
+  }
+
+  /**
+   * Update metadata fields on a Zotero library item.
+   * Gated through ApprovalDialog for user confirmation and recorded in AuditLog.
+   *
+   * Legacy contract: returns `true` on success, `false` when there were no
+   * valid fields, and **throws** when the user rejects the change. Callers that
+   * want to distinguish rejection from failure should use
+   * `updateItemMetadataGated` instead.
+   */
+  public async updateItemMetadata(
+    itemID: number,
+    updates: Record<string, any>,
+  ): Promise<boolean> {
+    const result = await this.updateItemMetadataGated(itemID, updates);
+    if (result.status === "rejected") {
+      throw new Error("Metadata update cancelled by user.");
+    }
+    return result.status === "success";
+  }
+
+  /**
+   * As `updateItemMetadata`, but returns the full outcome so callers can tell
+   * a user rejection apart from a failure. Throws only when the item is
+   * missing — a missing target is a caller bug, not a user decision.
+   */
+  public async updateItemMetadataGated(
+    itemID: number,
+    updates: Record<string, any>,
+  ): Promise<WriteResult> {
+    const item = await Zotero.Items.getAsync(itemID);
+    if (!item) {
+      throw new Error(`Item with ID ${itemID} not found.`);
     }
 
-    this.addon.data?.hermes?.auditLog?.record(
-      "file_change",
-      `Update metadata for "${displayName}"`,
-      "success",
-      { itemID, fields: Object.keys(cleanUpdates) },
+    const cleanUpdates = this.cleanFieldUpdates(updates);
+    if (Object.keys(cleanUpdates).length === 0) {
+      return { status: "failed", error: "No valid or modifiable fields." };
+    }
+
+    const displayName = (item as any).getDisplayTitle?.() || `Item ${itemID}`;
+
+    const outcome = await runWrite(this.writeContext(), {
+      action: "Update metadata",
+      target: displayName,
+      changes: this.buildMetadataDiff(item, cleanUpdates),
+      metadata: { itemID, fields: Object.keys(cleanUpdates) },
+      apply: async () => {
+        this.applyFieldUpdates(item, cleanUpdates);
+        await item.saveTx();
+        await this.refreshAttachedItem(item);
+      },
+    });
+
+    return { status: outcome.status, error: outcome.error };
+  }
+
+  /**
+   * Update the same field(s) across many items with one approval.
+   *
+   * The diff names the field and how many items change; the per-item old values
+   * are intentionally not listed, because a bulk operation on a large selection
+   * would produce an unreadable prompt. Failures are counted, not thrown, so a
+   * partial success is reported honestly rather than silently.
+   */
+  public async bulkUpdateMetadata(
+    itemIDs: number[],
+    updates: Record<string, any>,
+  ): Promise<WriteResult & { updated: number; failed: number }> {
+    const cleanUpdates = this.cleanFieldUpdates(updates);
+    const ids = itemIDs.filter((id) => Number.isInteger(id) && id > 0);
+    if (Object.keys(cleanUpdates).length === 0 || ids.length === 0) {
+      return {
+        status: "failed",
+        error: "No valid fields or items to update.",
+        updated: 0,
+        failed: 0,
+      };
+    }
+
+    const changes = Object.entries(cleanUpdates).map(
+      ([field, val]) => `${field} → "${val}" on ${ids.length} item(s)`,
     );
 
-    return true;
+    let updated = 0;
+    let failed = 0;
+
+    const outcome = await runWrite(this.writeContext(), {
+      action: "Bulk update metadata",
+      target: `${ids.length} item(s)`,
+      changes,
+      metadata: { itemIDs: ids, fields: Object.keys(cleanUpdates) },
+      apply: async () => {
+        for (const id of ids) {
+          try {
+            const item = await Zotero.Items.getAsync(id);
+            if (!item) {
+              failed += 1;
+              continue;
+            }
+            this.applyFieldUpdates(item, cleanUpdates);
+            await item.saveTx();
+            await this.refreshAttachedItem(item);
+            updated += 1;
+          } catch (error) {
+            failed += 1;
+            this.addon.log?.(
+              `[bulkUpdateMetadata] item ${id} failed: ${(error as Error).message}`,
+            );
+          }
+        }
+      },
+    });
+
+    return { status: outcome.status, error: outcome.error, updated, failed };
+  }
+
+  /**
+   * Clear a metadata field on one or more items (set to empty / remove creators).
+   *
+   * This is the "delete metadata" operation. It is destructive-but-reversible
+   * in the ordinary sense — the old value goes into the approval diff, so it is
+   * recoverable from the audit trail while the dialog is on screen.
+   */
+  public async deleteMetadataValue(
+    itemIDs: number[],
+    field: string,
+  ): Promise<WriteResult & { updated: number; failed: number }> {
+    const ids = itemIDs.filter((id) => Number.isInteger(id) && id > 0);
+    const resolved =
+      ItemManager.FIELD_ALIASES[field.toLowerCase()] || field.trim();
+
+    if (ids.length === 0) {
+      return {
+        status: "failed",
+        error: "No items supplied.",
+        updated: 0,
+        failed: 0,
+      };
+    }
+    if (ItemManager.PROTECTED_FIELDS.has(resolved) || resolved === "") {
+      return {
+        status: "failed",
+        error: `Field "${field}" cannot be cleared.`,
+        updated: 0,
+        failed: 0,
+      };
+    }
+    if (resolved === "creators") {
+      return {
+        status: "failed",
+        error:
+          "Clearing creators is not supported — provide a replacement creator " +
+          "list with updateItemMetadata instead.",
+        updated: 0,
+        failed: 0,
+      };
+    }
+
+    // Capture the values being discarded so the approval diff is a real
+    // before/after, and so the operator can recover them from the log.
+    const previous: Array<{ id: number; value: string }> = [];
+    for (const id of ids.slice(0, 50)) {
+      const item = Zotero.Items.get(id);
+      if (!item) continue;
+      const value = (item.getField(resolved as any) as string) || "";
+      if (value) previous.push({ id, value });
+    }
+
+    const preview = previous.map((p) => `${resolved}: "${p.value}" → (empty)`);
+    if (previous.length < ids.length) {
+      preview.push(
+        `… and ${ids.length - previous.length} item(s) with no value set`,
+      );
+    }
+
+    let updated = 0;
+    let failed = 0;
+
+    const outcome = await runWrite(this.writeContext(), {
+      action: `Clear ${resolved}`,
+      target: `${ids.length} item(s)`,
+      changes:
+        preview.length > 0
+          ? preview
+          : [`${resolved} → (empty) on ${ids.length} item(s)`],
+      metadata: { itemIDs: ids, field: resolved, previous },
+      apply: async () => {
+        for (const id of ids) {
+          try {
+            const item = await Zotero.Items.getAsync(id);
+            if (!item) {
+              failed += 1;
+              continue;
+            }
+            item.setField(resolved as any, "");
+            await item.saveTx();
+            await this.refreshAttachedItem(item);
+            updated += 1;
+          } catch (error) {
+            failed += 1;
+            this.addon.log?.(
+              `[deleteMetadataValue] item ${id} failed: ${(error as Error).message}`,
+            );
+          }
+        }
+      },
+    });
+
+    return { status: outcome.status, error: outcome.error, updated, failed };
+  }
+
+  /**
+   * Move items to the trash — the plugin's only destructive operation.
+   *
+   * Trash, never erase: the fleet invariant reserves permanent deletion for the
+   * operator. Items are recoverable from Zotero's trash until they empty it.
+   */
+  public async trashItems(
+    itemIDs: number[],
+  ): Promise<WriteResult & { trashed: number }> {
+    const ids = itemIDs.filter((id) => Number.isInteger(id) && id > 0);
+    if (ids.length === 0) {
+      return {
+        status: "failed",
+        error: "No items supplied.",
+        trashed: 0,
+      };
+    }
+
+    const titles: string[] = [];
+    for (const id of ids.slice(0, 20)) {
+      const item = Zotero.Items.get(id);
+      if (item) titles.push((item as any).getDisplayTitle?.() || `Item ${id}`);
+    }
+
+    const outcome = await runWrite(this.writeContext(), {
+      action: "Move to trash",
+      target: `${ids.length} item(s)`,
+      changeAction: "delete",
+      changes:
+        titles.length > 0
+          ? titles.map((t) => `→ trash: ${t}`)
+          : [`→ trash ${ids.length} item(s)`],
+      metadata: { itemIDs: ids },
+      apply: async () => {
+        const items = ids
+          .map((id) => Zotero.Items.get(id))
+          .filter(Boolean) as Zotero.Item[];
+        await trashItemsTx(items);
+      },
+    });
+
+    return {
+      status: outcome.status,
+      error: outcome.error,
+      trashed: outcome.status === "success" ? ids.length : 0,
+    };
   }
 }

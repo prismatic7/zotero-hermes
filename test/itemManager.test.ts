@@ -616,3 +616,208 @@ describe("ItemManager MenuManager integration (live Zotero runtime)", function (
     expect(() => R.getByTabID("__hermes_nonexistent_tab__")).to.not.throw();
   });
 });
+
+describe("ItemManager bulk metadata operations", function () {
+  after(function () {
+    if ((globalThis as any).__realZotero) {
+      (globalThis as any).Zotero = (globalThis as any).__realZotero;
+      delete (globalThis as any).__realZotero;
+    }
+  });
+
+  /**
+   * Install a Zotero stub with both getAsync and the synchronous get, because
+   * the bulk paths read titles for the diff via `Zotero.Items.get`.
+   */
+  function stubItems(map: Map<number, any>, trashCalls?: number[][]) {
+    const realZotero = (globalThis as any).Zotero;
+    if (!(globalThis as any).__realZotero) {
+      (globalThis as any).__realZotero = realZotero;
+    }
+    (globalThis as any).Zotero = {
+      ...realZotero,
+      Items: {
+        ...(realZotero?.Items || {}),
+        getAsync: async (id: number) => map.get(id) || null,
+        get: (id: number) => map.get(id) || null,
+        trashTx: async (ids: number[]) => {
+          trashCalls?.push(ids);
+        },
+      },
+    };
+  }
+
+  function addonWith(approve: boolean) {
+    const approvals: any[] = [];
+    const audits: any[] = [];
+    const addon = mockAddon();
+    (addon as any).data = {
+      hermes: {
+        approvalDialog: {
+          addPendingChange: async (change: any) => {
+            approvals.push(change);
+            return approve;
+          },
+        },
+        auditLog: {
+          record: (action: string, details: string, status: string) =>
+            audits.push({ action, details, status }),
+        },
+      },
+    };
+    return { addon, approvals, audits };
+  }
+
+  it("bulk-updates one field across many items in a single approval", async function () {
+    const items = new Map<number, any>([
+      [1, mockItem({ id: 1, fields: { title: "A" } })],
+      [2, mockItem({ id: 2, fields: { title: "B" } })],
+      [3, mockItem({ id: 3, fields: { title: "C" } })],
+    ]);
+    stubItems(items);
+    const { addon, approvals } = addonWith(true);
+    const manager = new ItemManager(addon);
+
+    const result = await manager.bulkUpdateMetadata([1, 2, 3], {
+      publication: "Sound Studies",
+    });
+
+    expect(result.status).to.equal("success");
+    expect(result.updated).to.equal(3);
+    expect(result.failed).to.equal(0);
+    expect(approvals).to.have.length(1);
+    expect(items.get(1).getField("publicationTitle")).to.equal("Sound Studies");
+    expect(items.get(3).getField("publicationTitle")).to.equal("Sound Studies");
+  });
+
+  it("does not touch any item when the bulk change is rejected", async function () {
+    const items = new Map<number, any>([
+      [1, mockItem({ id: 1, fields: { title: "A" } })],
+    ]);
+    stubItems(items);
+    const { addon } = addonWith(false);
+    const manager = new ItemManager(addon);
+
+    const result = await manager.bulkUpdateMetadata([1], { date: "2020" });
+
+    expect(result.status).to.equal("rejected");
+    expect(result.updated).to.equal(0);
+    expect(items.get(1).getField("date")).to.equal("");
+  });
+
+  it("counts a per-item failure without aborting the whole batch", async function () {
+    const broken = mockItem({ id: 2, fields: { title: "B" } });
+    (broken as any).saveTx = async () => {
+      throw new Error("locked");
+    };
+    const items = new Map<number, any>([
+      [1, mockItem({ id: 1, fields: { title: "A" } })],
+      [2, broken],
+    ]);
+    stubItems(items);
+    const { addon } = addonWith(true);
+    const manager = new ItemManager(addon);
+
+    const result = await manager.bulkUpdateMetadata([1, 2], { volume: "3" });
+
+    expect(result.status).to.equal("success");
+    expect(result.updated).to.equal(1);
+    expect(result.failed).to.equal(1);
+    expect(items.get(1).getField("volume")).to.equal("3");
+  });
+
+  it("reports failure when no items or no valid fields are supplied", async function () {
+    stubItems(new Map());
+    const { addon } = addonWith(true);
+    const manager = new ItemManager(addon);
+
+    const noItems = await manager.bulkUpdateMetadata([], { title: "x" });
+    expect(noItems.status).to.equal("failed");
+    expect(noItems.updated).to.equal(0);
+
+    const noFields = await manager.bulkUpdateMetadata([1], { id: 5 });
+    expect(noFields.status).to.equal("failed");
+  });
+
+  it("clears a metadata field and records the discarded value in the diff", async function () {
+    const items = new Map<number, any>([
+      [1, mockItem({ id: 1, fields: { title: "A", DOI: "10.1/abc" } })],
+    ]);
+    stubItems(items);
+    const { addon, approvals } = addonWith(true);
+    const manager = new ItemManager(addon);
+
+    const result = await manager.deleteMetadataValue([1], "doi");
+
+    expect(result.status).to.equal("success");
+    expect(result.updated).to.equal(1);
+    expect(items.get(1).getField("DOI")).to.equal("");
+    // The discarded value must be visible in the approval prompt.
+    expect(approvals[0].newContent).to.include("10.1/abc");
+  });
+
+  it("refuses to clear a protected field", async function () {
+    stubItems(new Map([[1, mockItem({ id: 1 })]]));
+    const { addon, approvals } = addonWith(true);
+    const manager = new ItemManager(addon);
+
+    const result = await manager.deleteMetadataValue([1], "dateAdded");
+
+    expect(result.status).to.equal("failed");
+    expect(approvals).to.have.length(0);
+  });
+
+  it("refuses to clear creators rather than silently emptying them", async function () {
+    stubItems(new Map([[1, mockItem({ id: 1 })]]));
+    const { addon } = addonWith(true);
+    const manager = new ItemManager(addon);
+
+    const result = await manager.deleteMetadataValue([1], "creators");
+
+    expect(result.status).to.equal("failed");
+    expect(result.error).to.include("replacement creator");
+  });
+
+  it("trashes items (never erases) when approved", async function () {
+    const trashCalls: number[][] = [];
+    const items = new Map<number, any>([
+      [1, mockItem({ id: 1, fields: { title: "A" } })],
+      [2, mockItem({ id: 2, fields: { title: "B" } })],
+    ]);
+    stubItems(items, trashCalls);
+    const { addon, approvals } = addonWith(true);
+    const manager = new ItemManager(addon);
+
+    const result = await manager.trashItems([1, 2]);
+
+    expect(result.status).to.equal("success");
+    expect(result.trashed).to.equal(2);
+    expect(trashCalls).to.deep.equal([[1, 2]]);
+    // Destructive action must be presented as a delete, not a modify.
+    expect(approvals[0].action).to.equal("delete");
+  });
+
+  it("does not trash anything when the user rejects", async function () {
+    const trashCalls: number[][] = [];
+    stubItems(new Map([[1, mockItem({ id: 1 })]]), trashCalls);
+    const { addon } = addonWith(false);
+    const manager = new ItemManager(addon);
+
+    const result = await manager.trashItems([1]);
+
+    expect(result.status).to.equal("rejected");
+    expect(result.trashed).to.equal(0);
+    expect(trashCalls).to.have.length(0);
+  });
+
+  it("returns failure for trashItems with no valid ids", async function () {
+    stubItems(new Map());
+    const { addon } = addonWith(true);
+    const manager = new ItemManager(addon);
+
+    const result = await manager.trashItems([0, -1]);
+
+    expect(result.status).to.equal("failed");
+    expect(result.trashed).to.equal(0);
+  });
+});

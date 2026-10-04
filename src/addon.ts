@@ -20,6 +20,7 @@ class Addon {
       citations: import("./modules/hermes/CitationManager").CitationManager;
       annotations: import("./modules/hermes/AnnotationManager").AnnotationManager;
       tags: import("./modules/hermes/TagManager").TagManager;
+      lookups: import("./modules/hermes/LookupManager").LookupManager;
       conversations: import("./modules/hermes/ConversationManager").ConversationManager;
       preferences: import("./modules/hermes/PreferencesManager").PreferencesManager;
       approvalDialog: import("./modules/hermes/ApprovalDialog").ApprovalDialog;

@@ -4,8 +4,45 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Library operations round (Workstream A+B).** Metadata CRUD, DOI lookup,
+  reverse-citation lookup, clear citations, bulk tags, and annotation
+  create/edit/search — all routed through one approval + audit gate.
+  - `src/utils/writeGate.ts` — a single write path for every Zotero mutation:
+    approve → apply → record. Before this, each manager invented its own
+    mutation path, so some writes logged an audit entry and some did not.
+    Bulk work made that inconsistency a safety problem.
+  - `src/modules/hermes/LookupManager.ts` — CrossRef/DataCite DOI resolution
+    and title→DOI lookup; Semantic Scholar reverse citations (DOI → citing
+    works).
+  - `ItemManager` — add/edit/delete metadata values, bulk update, clear field,
+    trash. Protected fields are enforced _before_ alias mapping.
+  - `TagManager` — bulk add/remove behind one approval; `findMissingTags`.
+  - `AnnotationManager` — create, edit and library-wide search.
+  - `CitationManager` — `formatCitation` returns in-text and bibliography
+    forms with the resolved style.
+
 ### Fixed
 
+- **Citation generation was silently dead**: `CitationManager` called
+  `appendCitationCluster(citation, true)` and expected the citeproc-js
+  `[[id, string], …]` return shape. Zotero 10 uses the citeproc-rs bridge,
+  whose `appendCitationCluster(citation)` takes **one** argument and returns a
+  differently-shaped object. Rewritten on `previewCitationCluster(citation,
+[], [], format)` — Zotero's own idiom (`quickCopy.js:287`, `cite.js:205`) —
+  and the engine is `free()`d after use.
+- **`AnnotationManager` fabricated a highlight position**: when no position was
+  supplied it wrote `rects: [[0,0,100,20]]`, placing a highlight at a location
+  that does not exist. It now refuses rather than inventing geometry.
+- **`updateItemMetadata` protected-field check was bypassable**: the alias map
+  ran before the guard, so an aliased protected field could slip through.
+- **Approval dialogs hid which item was being changed**: bulk tag operations
+  showed `Add tags — 3 item(s)`. The target now names the items, so the user
+  can see what they are approving.
+- **`getStyleByIDOrName` returned the caller's raw string** instead of the
+  style's canonical `styleID`, which is wrong whenever Zotero maps a renamed
+  style.
 - **Every Zotero directory silently failed to resolve**: Zotero 10 changed
   `Zotero.Profile.dir` and `Zotero.DataDirectory.dir` from `nsIFile` objects
   to **plain strings**. The plugin picked `Profile.dir` first and called
@@ -22,6 +59,16 @@ All notable changes to this project are documented in this file.
   `.filter()` on `Zotero.Items.getAsync(itemIDs)`, which is correct (an
   array in, an array out), but the test stub returned a bare object — so the
   code path was never exercised. The stub now models the real contract.
+
+### Notes
+
+- **OCR is not available through the plugin API.** A grep for an OCR surface
+  across the extracted Zotero 10.0.5 tree hits one file,
+  `xpcom/recognizeDocument.js`, and `Zotero.OCR` is not assigned anywhere.
+  `Zotero.RecognizeDocument` is _metadata_ recognition: it requires an
+  existing text layer and POSTs the document to a remote Zotero service.
+  Scanned-item OCR needs its own spike (an external engine writing a text
+  layer back into the attachment) and is not promised here.
 
 ## [0.3.4] — 2026-10-04
 

@@ -204,3 +204,183 @@ describe("TagManager", function () {
     expect(item.isSaved()).to.be.true;
   });
 });
+
+describe("TagManager bulk operations", function () {
+  after(function () {
+    if ((globalThis as any).__realZotero) {
+      (globalThis as any).Zotero = (globalThis as any).__realZotero;
+      delete (globalThis as any).__realZotero;
+    }
+  });
+
+  /** Several distinct tag items, keyed by id, with a shared Zotero stub. */
+  function stubMany(ids: number[]) {
+    const realZotero = (globalThis as any).Zotero;
+    if (!(globalThis as any).__realZotero) {
+      (globalThis as any).__realZotero = realZotero;
+    }
+    const items = new Map<number, any>();
+    for (const id of ids) {
+      const item = mockTagItem([]);
+      item.id = id;
+      items.set(id, item);
+    }
+    (globalThis as any).Zotero = {
+      ...realZotero,
+      Libraries: { userLibraryID: 1 },
+      Items: {
+        ...(realZotero?.Items || {}),
+        getAsync: async (id: number | number[]) =>
+          Array.isArray(id)
+            ? id.map((i) => items.get(i)).filter(Boolean)
+            : items.get(id) || null,
+        get: (id: number) => items.get(id) || null,
+      },
+      Tags: {
+        ...(realZotero?.Tags || {}),
+        getAll: async () => [
+          { tag: "theory/affect", count: 10 },
+          { tag: "method/par", count: 4 },
+        ],
+      },
+    };
+    return items;
+  }
+
+  function addonWith(approve: boolean) {
+    const approvals: any[] = [];
+    const addon = mockAddon();
+    (addon as any).data = {
+      hermes: {
+        approvalDialog: {
+          addPendingChange: async (c: any) => {
+            approvals.push(c);
+            return approve;
+          },
+        },
+        auditLog: { record: () => {} },
+      },
+    };
+    return { addon, approvals };
+  }
+
+  it("adds tags to many items behind one approval", async function () {
+    const items = stubMany([1, 2, 3]);
+    const { addon, approvals } = addonWith(true);
+    const manager = new TagManager(addon);
+
+    const result = await manager.bulkAddTags([1, 2, 3], ["theory/affect"]);
+
+    expect(result.status).to.equal("success");
+    expect(result.updated).to.equal(3);
+    expect(result.failed).to.equal(0);
+    expect(approvals).to.have.length(1);
+    expect(
+      items
+        .get(1)
+        .getTags()
+        .map((t: any) => t.tag),
+    ).to.include("theory/affect");
+    expect(
+      items
+        .get(3)
+        .getTags()
+        .map((t: any) => t.tag),
+    ).to.include("theory/affect");
+  });
+
+  it("removes tags from many items behind one approval", async function () {
+    const items = stubMany([1, 2]);
+    items.get(1).addTag("theory/affect");
+    items.get(2).addTag("theory/affect");
+    const { addon } = addonWith(true);
+    const manager = new TagManager(addon);
+
+    const result = await manager.bulkRemoveTags([1, 2], ["theory/affect"]);
+
+    expect(result.status).to.equal("success");
+    expect(result.updated).to.equal(2);
+    expect(
+      items
+        .get(1)
+        .getTags()
+        .map((t: any) => t.tag),
+    ).to.not.include("theory/affect");
+  });
+
+  it("changes nothing when the bulk tag change is rejected", async function () {
+    const items = stubMany([1, 2]);
+    const { addon } = addonWith(false);
+    const manager = new TagManager(addon);
+
+    const result = await manager.bulkAddTags([1, 2], ["method/par"]);
+
+    expect(result.status).to.equal("rejected");
+    expect(result.updated).to.equal(0);
+    expect(items.get(1).getTags()).to.have.length(0);
+  });
+
+  it("de-duplicates and trims the tag list before applying", async function () {
+    const items = stubMany([1]);
+    const { addon, approvals } = addonWith(true);
+    const manager = new TagManager(addon);
+
+    await manager.bulkAddTags([1], ["  method/par  ", "method/par", ""]);
+
+    // The diff should show the tag once, not three times.
+    expect(approvals[0].newContent).to.equal("+ method/par");
+  });
+
+  it("counts a per-item failure without aborting the batch", async function () {
+    const items = stubMany([1, 2]);
+    items.get(2).saveTx = async () => {
+      throw new Error("locked");
+    };
+    const { addon } = addonWith(true);
+    const manager = new TagManager(addon);
+
+    const result = await manager.bulkAddTags([1, 2], ["method/par"]);
+
+    expect(result.status).to.equal("success");
+    expect(result.updated).to.equal(1);
+    expect(result.failed).to.equal(1);
+  });
+
+  it("fails fast with no items or no tags", async function () {
+    stubMany([]);
+    const { addon, approvals } = addonWith(true);
+    const manager = new TagManager(addon);
+
+    expect((await manager.bulkAddTags([], ["x"])).status).to.equal("failed");
+    expect((await manager.bulkAddTags([1], [])).status).to.equal("failed");
+    expect(approvals).to.have.length(0);
+  });
+
+  it("keeps the legacy addTags contract: throws when the user rejects", async function () {
+    stubMany([1]);
+    const { addon } = addonWith(false);
+    const manager = new TagManager(addon);
+
+    let threw = false;
+    try {
+      await manager.addTags(1, ["method/par"]);
+    } catch {
+      threw = true;
+    }
+
+    expect(threw).to.equal(true);
+  });
+
+  it("reports tags that do not exist in the library", async function () {
+    stubMany([1]);
+    const { addon } = addonWith(true);
+    const manager = new TagManager(addon);
+
+    const missing = await manager.findMissingTags([
+      "theory/affect",
+      "sonic-studies",
+    ]);
+
+    expect(missing).to.deep.equal(["sonic-studies"]);
+  });
+});
