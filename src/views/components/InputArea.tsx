@@ -41,6 +41,7 @@ export const InputArea: React.FC<InputAreaProps> = ({
     <div
       className="hermes-input-area"
       style={{
+        position: "relative",
         padding: "12px 14px",
         borderTop: "1px solid var(--hermes-border, #dee1db)",
         backgroundColor: "var(--hermes-bg-secondary, #f7f8f5)",

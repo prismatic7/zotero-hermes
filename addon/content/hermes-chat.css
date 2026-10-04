@@ -673,6 +673,7 @@
 
 /* ─── Input Area ─── */
 .hermes-input-area {
+  position: relative;
   padding: 12px 14px;
   border-top: 1px solid var(--hermes-border, #dee1db);
   background-color: var(--hermes-bg-secondary, #f7f8f5);
@@ -940,6 +941,15 @@
   background: none;
   width: 100%;
   text-align: left;
+  /* Zotero's chrome stylesheet (zotero-platform/<os>/zotero.css) applies
+     `button { max-height: 25px; margin: 0 -2px -1px }` to EVERY <button> in the
+     main window. These rows are flex containers whose descriptions wrap to
+     31–76px, so without the reset each row is clamped to 25px and the text
+     overflows into its neighbours. Reset it explicitly. */
+  max-height: none;
+  min-height: 0;
+  margin: 0;
+  line-height: 1.45;
 }
 
 .hermes-slash-item:hover,

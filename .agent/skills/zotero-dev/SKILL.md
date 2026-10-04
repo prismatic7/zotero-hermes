@@ -38,6 +38,7 @@ This skill covers:
 - `references/coding-conventions.md`: Code style and organization
 - `references/commands-settings.md`: Command and settings implementation
 - `references/common-tasks.md`: Frequently needed operations
+- `references/live-runtime-debugging.md`: Probing the user's running Zotero over Firefox RDP when there is no log — protocol, what reads over the channel, and the `undefined`-means-failed-probe rule
 
 ## Zotero-Specific Patterns
 
