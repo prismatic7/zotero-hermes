@@ -103,11 +103,11 @@ bump from `package.json`, and note the tag you create may skip a number.
       `src test`. CHANGELOG.md and other markdown are included; unformatted
       markdown (e.g. `*emphasis*` instead of `_emphasis_`) turns CI red.
 - [ ] `npx tsc --noEmit` and `./node_modules/.bin/eslint src test` clean
-- [ ] `npm test` — failures are compared as a SET against the known baseline,
-      not by count. CI's `test` job has been red on main since 2026-09-10
-      (`profileDir.clone is not a function`, goroutine deadlock on teardown);
-      local `zotero-plugin test` shows the same 13 pre-existing failures with
-      exit 1. Do not treat CI red as caused by the release unless the set grew.
+- [ ] `npm test` — the suite must exit 0 with **0 failures** on the committed
+      tree. (History: CI's `test` job was red on main from 2026-09-10 to
+      2026-10-04 because of the `Profile.dir` string bug plus two bogus test
+      doubles. That is fixed; do not re-normalise a red test job.) Failures
+      are compared as a SET, not a count.
 - [ ] Commit `release: v<x.y.z>`, tag `v<x.y.z>`, push both — the tag push
       triggers the release workflow; do not `gh release create` by hand
 - [ ] Verify the published release ships the XPI:

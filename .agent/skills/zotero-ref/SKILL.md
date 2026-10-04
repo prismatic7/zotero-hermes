@@ -83,6 +83,52 @@ annotation.annotationText = "Selected text";
 await annotation.saveTx();
 ```
 
+## Directory resolution (Zotero 10 — read this before touching paths)
+
+`Zotero.Profile.dir` and `Zotero.DataDirectory.dir` are **plain strings** in
+Zotero 10, not `nsIFile`. Verified live in Zotero 10.0.5:
+
+```
+typeof Zotero.Profile.dir          -> "string"
+typeof Zotero.Profile.dir.clone    -> "undefined"
+Zotero.Profile.dir.clone()         -> TypeError: p.clone is not a function
+typeof Zotero.DataDirectory.dir    -> "string"
+```
+
+`getProfileDirectory()` / `getZoteroDirectory()` still exist but are
+**deprecated** — they log a warning and just wrap
+`Zotero.File.pathToFile(dir)` (`xpcom/zotero.js:1047`).
+
+The old idiom is a trap, because the string wins the `||` and `.clone()`
+then throws:
+
+```typescript
+// WRONG — Profile.dir is a string, so this throws at .clone()
+const profileDir = (Zotero as any).Profile?.dir || Zotero.getProfileDirectory?.();
+const dir = profileDir.clone() as nsIFile;
+```
+
+```typescript
+// RIGHT — go through the shared helper
+import { getProfileDir, getDataDir, ensureHermesDir, getProfileDirPath, getDataDirPath }
+  from "../../utils/zoteroPaths";
+
+const baseDir = getProfileDir() || getDataDir();       // nsIFile | null
+const dirPath = ensureHermesDir(baseDir, "workspace"); // creates + returns path
+const dataPath = getDataDirPath();                     // string
+```
+
+`src/utils/zoteroPaths.ts` converts the string via
+`Zotero.File.pathToFile()` and still tolerates an `nsIFile` (mock or older
+Zotero), so it is the only place that should know about the shape.
+
+Two related API facts worth remembering:
+
+- `Zotero.Items.getAsync(ids)` returns an **array** when given an array, and
+  the object itself when given a single id (`dataObjects.js:152-211`). A test
+  stub returning a bare object silently skips `array.filter()` code paths.
+- `nsIFile.isDirectory` is a boolean **property**, not a method.
+
 ## Manifest Requirements
 
 ### Required Fields
