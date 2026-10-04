@@ -40,16 +40,38 @@ npm test
 
 ### Release
 
+Releases are **tag-driven through CI**. `.github/workflows/release.yml`
+triggers on any pushed `v*` tag and calls the shared
+`zotero-plugin-dev/workflows/.github/workflows/release-plugin.yml@main`,
+which builds the plugin, runs `npm run release` (creates the GitHub release,
+uploads `hermes-agent-for-zotero.xpi` + `update.json`) and posts the comment.
+
 ```bash
-# Update version
-npm version [major|minor|patch]
+# 1. version + changelog on main
+npm version patch --no-git-tag-version     # package.json + package-lock.json
+#    promote CHANGELOG [Unreleased] -> [<ver>] — YYYY-MM-DD, then:
+npx prettier --write CHANGELOG.md          # whole-repo prettier is the gate
 
-# Build production
-npm run build
-
-# Create release
-npm run release
+# 2. gates (see Release Checklist) then commit + tag + push
+git commit -m "release: v<x.y.z>"
+git tag -a v<x.y.z> -m "Release v<x.y.z>"
+git push origin main && git push origin v<x.y.z>
+# 3. the tag push runs the release workflow — watch it
+gh run list --workflow=release.yml --limit 1
 ```
+
+**Do NOT run `gh release create` by hand.** The workflow creates the release
+itself; a pre-existing release makes it fail with
+`422 Validation Failed: already_exists` (field `tag_name`). If that happens,
+delete only the release (`gh release delete <tag> --yes`, keeping the tag) and
+re-run the workflow by re-pushing the tag:
+`git push origin :refs/tags/<tag> && git push origin <tag>`.
+The workflow has no `workflow_dispatch` trigger, so a tag re-push is the only
+way to re-run it without a new commit.
+
+Version note: `package.json` may already sit above the last tag (e.g. tagged
+v0.3.2 but package at 0.3.3 — 0.3.3 was released without a tag). Compute the
+bump from `package.json`, and note the tag you create may skip a number.
 
 ## Quick Reference
 
@@ -75,16 +97,23 @@ npm run release
 
 ## Release Checklist
 
-- [ ] Version bumped in package.json
-- [ ] CHANGELOG.md updated
-- [ ] All tests passing
-- [ ] Linting clean
+- [ ] Version bumped in package.json (`npm version patch --no-git-tag-version`)
+- [ ] CHANGELOG.md `[Unreleased]` promoted to `[<ver>] — YYYY-MM-DD`
+- [ ] **`npx prettier --check .`** — the repo's `lint:check` is whole-repo, not
+      `src test`. CHANGELOG.md and other markdown are included; unformatted
+      markdown (e.g. `*emphasis*` instead of `_emphasis_`) turns CI red.
+- [ ] `npx tsc --noEmit` and `./node_modules/.bin/eslint src test` clean
+- [ ] `npm test` — failures are compared as a SET against the known baseline,
+      not by count. CI's `test` job has been red on main since 2026-09-10
+      (`profileDir.clone is not a function`, goroutine deadlock on teardown);
+      local `zotero-plugin test` shows the same 13 pre-existing failures with
+      exit 1. Do not treat CI red as caused by the release unless the set grew.
+- [ ] Commit `release: v<x.y.z>`, tag `v<x.y.z>`, push both — the tag push
+      triggers the release workflow; do not `gh release create` by hand
+- [ ] Verify the published release ships the XPI:
+      `gh release view <tag> --json assets --jq '.assets[].name'`
+- [ ] Submodule `.refs/zotero-pdfjs-types` restored if it accumulated noise
 - [ ] README updated
-- [ ] Manifest version updated
-- [ ] Git tag created
-- [ ] GitHub release drafted
-- [ ] XPI file attached
-- [ ] Update URL configured
 
 ## Testing Strategy
 
