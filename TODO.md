@@ -1,10 +1,10 @@
 # Zotero Hermes Plugin — Full Rework TODO
 
 **Created:** 21 May 2026  
-**Updated:** 18 September 2026  
-**Current Version:** 0.3.3 (Stable)  
+**Updated:** 4 October 2026  
+**Current Version:** 0.3.4 (Stable)  
 **Platform:** Zotero 7.0–10.x (Mozilla 140 ESR)  
-**Status:** ✅ Core Infrastructure, UI Redesign, Security Hardening & Zotero 10 Compatibility Complete
+**Status:** ✅ Core Infrastructure, UI Redesign, Security Hardening, Zotero 10 Compatibility & Library Operations Complete
 
 ---
 
@@ -581,6 +581,16 @@ All features must follow Zotero Hermes coding conventions.
   - **Pillar D (Smart Tag Taxonomy & Ontology Refinement)**: `TagManager.detectTaxonomyClusters()` duplicate/variant detection, `TagManager.renameTag()` with approval gating, `/organize-tags` and `/organize-tags merge OldTag -> NewTag` slash commands.
   - **Pillar A (Chronological Evolution & Timeline Mapping)**: `/timeline` command generating chronological breakthroughs, methodological transitions, and forward research trajectories.
   - **Pillar B (Peer Review & Seminar Prep Kit)**: `/critique` (methodological rigor, hidden assumptions, counter-arguments) and `/quiz` (seminar debate questions, technical traps, defense cheat sheets).
+- **4 October 2026** - Library operations round (Workstream A+B) and the design-doc reconciliation:
+  - **Single write gate** (`src/utils/writeGate.ts`): every Zotero mutation now runs approve → apply → record, so no manager can write without an approval dialog and an audit entry.
+  - **Metadata CRUD & bulk ops** (`ItemManager`): add/edit/delete values, bulk update, clear field, trash.
+  - **DOI lookup and reverse citations** (`LookupManager`): CrossRef/DataCite resolution, title→DOI, Semantic Scholar citing-works.
+  - **Citations** (`CitationManager.formatCitation`): in-text and bibliography forms on the citeproc-rs bridge (`previewCitationCluster`); the old `appendCitationCluster(citation, true)` call was silently unusable under Zotero 10.
+  - **Annotations** (`AnnotationManager`): create (real geometry required — no fabricated rects), edit, library-wide search.
+  - **Tags** (`TagManager`): bulk add/remove behind one approval; `findMissingTags`.
+  - **Annotations → Obsidian** (`ExportManager.exportAnnotationsToObsidian`): a note titled `Title — Author`, citekey preserved in frontmatter and inline.
+  - **B4 slash commands**: `/doi`, `/cites`, `/bulk-metadata`, `/bulk-field`, `/anno-search`, `/anno-edit`.
+  - **Design docs reconciled**: `DESIGN.md`'s north star was amended to match shipped code (discovery and in-process reading sanctioned; the sidecar narrowed to embeddings, OCR and long batch jobs). Workstream D resequenced D0 (lexical, no sidecar) → D1 → D2 → D3.
 
 ### Current Known Constraints & Backlog
 

@@ -55,6 +55,12 @@ grounded in the actual metadata, notes, annotations, and tags.
 | Terminal abort button                   | ✅                                     |
 | Windowed message list rendering         | ✅ (progressive windowing)             |
 | Reader tab & selection awareness        | ✅                                     |
+| DOI lookup (`/doi`, CrossRef/DataCite)  | ✅                                     |
+| Reverse citations (`/cites`)            | ✅ (Semantic Scholar)                  |
+| Bulk metadata edit (`/bulk-metadata`)   | ✅ (gated, per approval)               |
+| Annotation search (`/anno-search`)      | ✅ (library-wide)                      |
+| Annotation edit (`/anno-edit`)          | ✅ (gated)                             |
+| Annotations → Obsidian note             | ✅ (`Title — Author`)                  |
 
 ## Roadmap (validated against user intent)
 

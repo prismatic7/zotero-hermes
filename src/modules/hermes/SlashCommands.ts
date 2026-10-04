@@ -1,4 +1,6 @@
 import type Addon from "../../addon";
+import type { AnnotationQuery } from "./AnnotationManager";
+import { isDoiLike, normaliseDoi } from "./LookupManager";
 
 export type SlashCommandResult =
   | null
@@ -800,7 +802,351 @@ ${cleanBib}
     },
     name: "quiz",
   },
+  {
+    description:
+      "Look up a DOI via CrossRef/DataCite, or find one from the attached item's title. Usage: `/doi [doi]`",
+    execute: async (addon, args) => {
+      const lookups = addon.data.hermes?.lookups;
+      if (!lookups) return "Lookup services are not initialised.";
+
+      const arg = args.trim();
+      // A bare DOI is looked up directly; otherwise fall back to the attached
+      // item's title (and author/year) via CrossRef's bibliographic query.
+      const doi = arg;
+
+      if (!doi || !isDoiLike(normaliseDoi(doi))) {
+        const attached = addon.data.hermes?.items.getAttachedItems() || [];
+        if (attached.length === 0) {
+          return arg
+            ? `\`${arg}\` does not look like a DOI, and no item is attached to search by title. Attach an item with \`/context\` first.`
+            : "Usage: `/doi 10.1234/example` — or attach an item and run `/doi` to search by its title.";
+        }
+        const parent = attached[0];
+        const titleQuery = parent.title;
+        const record = await lookups.findDoiByTitle(titleQuery, {
+          author: parent.creators?.[0],
+          year: parent.date,
+        });
+        if (!record) {
+          return `No DOI found for **${titleQuery}**. CrossRef's bibliographic match is approximate — verify any candidate before applying.`;
+        }
+        return `### DOI candidate for **${titleQuery}**
+
+- **DOI**: \`${record.doi}\`
+- **Matched title**: ${record.title}
+- **Source**: ${record.source}
+
+*Apply with \`/metadata doi=${record.doi}\`. The match is approximate — check it against the item first.*`;
+      }
+
+      const record = await lookups.lookupDoi(doi);
+      if (!record) {
+        return `No record found for DOI \`${normaliseDoi(doi)}\` in CrossRef or DataCite. Check the DOI for typos.`;
+      }
+
+      const creators =
+        record.creators
+          .map((c) => `${c.firstName || ""} ${c.lastName}`.trim())
+          .join("; ") || "(none listed)";
+
+      return `### DOI record — \`${record.doi}\`
+
+- **Title**: ${record.title}
+- **Type**: ${record.itemType}
+- **Creators**: ${creators}
+- **Date**: ${record.date || "(none)"}${record.year ? ` (${record.year})` : ""}
+- **Publication**: ${record.publicationTitle || "(none)"}
+- **Volume/Issue/Pages**: ${record.volume || "—"}/${record.issue || "—"}/${record.pages || "—"}
+- **Publisher**: ${record.publisher || "(none)"}
+- **Source**: ${record.source}
+
+*Apply the DOI to the attached item with \`/metadata doi=${record.doi}\`.*`;
+    },
+    name: "doi",
+  },
+  {
+    description:
+      "Reverse-citation lookup: which works cite the attached item's DOI. Usage: `/cites`",
+    execute: async (addon) => {
+      const lookups = addon.data.hermes?.lookups;
+      if (!lookups) return "Lookup services are not initialised.";
+
+      const attached = addon.data.hermes?.items.getAttachedItems() || [];
+      if (attached.length === 0) {
+        return "No item attached. Attach a paper with `/context`, then run `/cites` to see what cites it.";
+      }
+      const parent = attached[0];
+      if (!parent.doi) {
+        return `**${parent.title}** has no DOI. Run \`/doi\` to find one first.`;
+      }
+
+      // Build the DOI→itemID map once so the synchronous matcher stays
+      // synchronous.
+      const libraryByDoi = await buildLibraryDoiIndex();
+
+      const works = await lookups.findCitingWorks(parent.doi, {
+        limit: 25,
+        isInLibrary: (citingDoi) => {
+          const id = libraryByDoi.get(normaliseDoi(citingDoi));
+          return id ? { id } : null;
+        },
+      });
+
+      if (works.length === 0) {
+        return `Semantic Scholar returned no citing works for **${parent.title}** (\`${parent.doi}\`). The paper may be too recent to have citations indexed.`;
+      }
+
+      const list = works
+        .map((w) => {
+          const venue = w.venue ? ` — *${w.venue}*` : "";
+          const year = w.year ? ` (${w.year})` : "";
+          const doi = w.doi ? ` \`${w.doi}\`` : "";
+          const badge = w.inLibrary ? "  **[in your library]**" : "";
+          return `- ${w.title}${year}${venue}${doi}${badge}`;
+        })
+        .join("\n");
+
+      const inLibrary = works.filter((w) => w.inLibrary).length;
+      return `### Works citing **${parent.title}** (${works.length} of up to 25)
+
+${list}
+
+*${inLibrary} of these are already in your library.*`;
+    },
+    name: "cites",
+  },
+  {
+    description:
+      "Edit metadata across every item in the selected collection. Usage: `/bulk-metadata field=value, ...`",
+    execute: async (addon, args) => {
+      const col = addon.data.hermes?.items.getSelectedCollection();
+      if (!col) {
+        return "No collection selected in the Zotero collections tree. Click a collection, then run `/bulk-metadata` again.";
+      }
+      const trimmed = args.trim();
+      if (!trimmed) {
+        return "Usage: `/bulk-metadata field=value, ...` — e.g. `/bulk-metadata language=en, publisher=My Press`";
+      }
+
+      const attached = await addon.data.hermes!.items.attachCollection(
+        col,
+        500,
+      );
+      if (attached.length === 0) {
+        return `No research items found in collection **"${col.name}"**.`;
+      }
+
+      const updates = parseFieldUpdates(trimmed);
+      if (Object.keys(updates).length === 0) {
+        return "Could not parse any field updates. Usage: `/bulk-metadata field=value, ...`";
+      }
+
+      const outcome = await addon.data.hermes!.items.bulkUpdateMetadata(
+        attached.map((i) => i.id),
+        updates,
+      );
+
+      if (outcome.status === "rejected") {
+        return "Bulk metadata update cancelled at the approval dialog.";
+      }
+      if (outcome.status === "failed") {
+        return `Bulk metadata update failed: ${outcome.error || "unknown error"}`;
+      }
+      const fields = Object.keys(updates).join(", ");
+      return `Bulk metadata update (**${fields}**) applied to **${outcome.updated}** item(s) in **"${col.name}"**${outcome.failed ? `, ${outcome.failed} failed` : ""}.`;
+    },
+    name: "bulk-metadata",
+  },
+  {
+    description:
+      "Edit metadata across every item attached to the conversation. Usage: `/bulk-field field=value, ...`",
+    execute: async (addon, args) => {
+      const attached = addon.data.hermes?.items.getAttachedItems() || [];
+      if (attached.length === 0) {
+        return "No items attached to the conversation. Attach items with `/context` or `/collection` first.";
+      }
+      const trimmed = args.trim();
+      if (!trimmed) {
+        return "Usage: `/bulk-field field=value, ...` — e.g. `/bulk-field language=en`";
+      }
+
+      const updates = parseFieldUpdates(trimmed);
+      if (Object.keys(updates).length === 0) {
+        return "Could not parse any field updates. Usage: `/bulk-field field=value, ...`";
+      }
+
+      const outcome = await addon.data.hermes!.items.bulkUpdateMetadata(
+        attached.map((i) => i.id),
+        updates,
+      );
+
+      if (outcome.status === "rejected") {
+        return "Bulk metadata update cancelled at the approval dialog.";
+      }
+      if (outcome.status === "failed") {
+        return `Bulk metadata update failed: ${outcome.error || "unknown error"}`;
+      }
+      const fields = Object.keys(updates).join(", ");
+      return `Bulk metadata update (**${fields}**) applied to **${outcome.updated}** attached item(s)${outcome.failed ? `, ${outcome.failed} failed` : ""}.`;
+    },
+    name: "bulk-field",
+  },
+  {
+    description:
+      "Edit annotations in place. Usage: `/anno-edit <key> text=..., comment=..., color=#ffd400, page=...`",
+    execute: async (addon, args) => {
+      const trimmed = args.trim();
+      if (!trimmed) {
+        return "Usage: `/anno-edit <annotationKey> comment=Fixed, color=#a28ae5` — get a key from `/annotations` or `/anno-search`.";
+      }
+      const spaceIdx = trimmed.indexOf(" ");
+      if (spaceIdx === -1) {
+        return "Missing patch. Usage: `/anno-edit <annotationKey> comment=...`";
+      }
+      const ref = trimmed.slice(0, spaceIdx).trim();
+      const patchRaw = trimmed.slice(spaceIdx + 1).trim();
+      if (!patchRaw) {
+        return "Missing patch. Usage: `/anno-edit <annotationKey> comment=...`";
+      }
+
+      const parsed = parseFieldUpdates(patchRaw);
+      const patch: {
+        text?: string;
+        comment?: string;
+        color?: string;
+        pageLabel?: string;
+      } = {};
+      if (parsed.text !== undefined) patch.text = String(parsed.text);
+      if (parsed.comment !== undefined) patch.comment = String(parsed.comment);
+      // Accept both `color` and `colour`; the manager field is `color`.
+      if (parsed.color !== undefined) patch.color = String(parsed.color);
+      else if (parsed.colour !== undefined) patch.color = String(parsed.colour);
+      // `page` maps to Zotero's page *label* for an annotation.
+      if (parsed.page !== undefined) patch.pageLabel = String(parsed.page);
+
+      if (Object.keys(patch).length === 0) {
+        return "No recognised annotation fields. Use `text`, `comment`, `color` or `page`.";
+      }
+
+      const result = await addon.data.hermes!.annotations.updateAnnotationById(
+        ref,
+        patch,
+      );
+      if (result.status === "rejected") {
+        return "Annotation edit cancelled at the approval dialog.";
+      }
+      if (result.status === "failed") {
+        return `Annotation edit failed: ${result.error || "unknown error"}`;
+      }
+      return `Annotation \`${ref}\` updated: ${Object.keys(patch).join(", ")}.`;
+    },
+    name: "anno-edit",
+  },
+  {
+    description:
+      "Search annotations across the whole library and cite them. Usage: `/anno-search <text>`",
+    execute: async (addon, args) => {
+      const query = args.trim();
+      if (!query) {
+        return "Usage: `/anno-search <text>` — searches annotation text and comments library-wide.";
+      }
+
+      const annotationQuery: AnnotationQuery = { text: query, limit: 200 };
+      const results =
+        await addon.data.hermes!.annotations.searchAnnotations(annotationQuery);
+
+      if (results.length === 0) {
+        return `No annotations match **"${query}"**.`;
+      }
+
+      const list = results
+        .slice(0, 15)
+        .map((a) => {
+          const page = a.page ? `p.${a.page}` : "—";
+          const body = (a.text || a.comment || "").slice(0, 120);
+          const key = a.id ? ` \`${a.id}\`` : "";
+          return `- **${page}** (${a.type}): "${body}"${key}`;
+        })
+        .join("\n");
+
+      return `### ${results.length} annotation(s) matching **"${query}"**
+
+${list}${results.length > 15 ? `\n\n*…and ${results.length - 15} more.*` : ""}
+
+*Edit one with \`/anno-edit <key> comment=...\`.*`;
+    },
+    name: "anno-search",
+  },
 ];
+
+/**
+ * Parse `field=value, field=value` into a plain map.
+ *
+ * Mirrors the `/metadata` parser: comma-separated pairs, `=` or `:`, with
+ * surrounding quotes stripped. `creators`/`authors` become an array split on
+ * `;`. Extracted so every metadata-editing command parses arguments the same
+ * way rather than each inventing its own.
+ */
+function parseFieldUpdates(input: string): Record<string, any> {
+  const updates: Record<string, any> = {};
+  const pairs = input.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+  for (const pair of pairs) {
+    const eqIdx = pair.indexOf("=");
+    const colonIdx = pair.indexOf(":");
+    const sepIdx =
+      eqIdx !== -1 && (colonIdx === -1 || eqIdx < colonIdx) ? eqIdx : colonIdx;
+    if (sepIdx === -1) continue;
+
+    const key = pair.slice(0, sepIdx).trim();
+    let val = pair.slice(sepIdx + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (!key) continue;
+
+    if (key.toLowerCase() === "creators" || key.toLowerCase() === "authors") {
+      updates.creators = val
+        .split(";")
+        .map((c) => c.trim())
+        .filter(Boolean);
+    } else {
+      updates[key] = val;
+    }
+  }
+  return updates;
+}
+
+/**
+ * Build a `DOI → itemID` index of the user's library.
+ *
+ * `/cites` needs a *synchronous* `isInLibrary` matcher (see
+ * `LookupManager.findCitingWorks`), so the library is read once up front
+ * rather than per citing work. Dois are normalised on both sides so case and
+ * `https://doi.org/` prefixes do not defeat the match.
+ */
+async function buildLibraryDoiIndex(): Promise<Map<string, number>> {
+  const index = new Map<string, number>();
+  try {
+    const ids = await Zotero.Items.getAll(
+      Zotero.Libraries.userLibraryID,
+      false,
+      false,
+      true,
+    );
+    const items = (await Zotero.Items.getAsync(ids)) as any[];
+    for (const item of items) {
+      const raw = item?.getField?.("DOI");
+      if (raw) index.set(normaliseDoi(String(raw)), item.id);
+    }
+  } catch {
+    // A failed index degrades to "nothing marked as in-library" — never lets
+    // a citation listing fail outright.
+  }
+  return index;
+}
 
 /**
  * Get all registered slash commands.

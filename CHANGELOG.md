@@ -9,6 +9,14 @@ All notable changes to this project are documented in this file.
 - **Library operations round (Workstream A+B).** Metadata CRUD, DOI lookup,
   reverse-citation lookup, clear citations, bulk tags, and annotation
   create/edit/search — all routed through one approval + audit gate.
+  - **B4 — slash commands for the whole round.** `/doi` (resolve a DOI, or find
+    one from the attached item's title via CrossRef), `/cites` (which works cite
+    the attached item — Semantic Scholar, marking hits already in the library),
+    `/bulk-metadata` (edit a field across a collection), `/bulk-field` (same
+    across attached items), `/anno-search` (library-wide annotation search), and
+    `/anno-edit` (edit an annotation's comment/colour/text/page). The
+    `field=value` argument parser is now shared with `/metadata` rather than
+    duplicated per command.
   - `src/utils/writeGate.ts` — a single write path for every Zotero mutation:
     approve → apply → record. Before this, each manager invented its own
     mutation path, so some writes logged an audit entry and some did not.

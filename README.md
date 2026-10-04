@@ -148,6 +148,41 @@ Open **Zotero → Edit → Settings → Hermes Agent** to configure:
 - "Compare these two articles" (with multiple items attached)
 - "/clear" — Clear the conversation
 
+### Slash Commands
+
+Library operations run through the chat input. Every Zotero write (metadata,
+tags, annotations) opens an approval dialog first and is recorded in the audit
+log.
+
+| Command                         | What it does                                                           |
+| ------------------------------- | ---------------------------------------------------------------------- |
+| `/clear`                        | Clear the current conversation                                         |
+| `/context`                      | Attach selected library items as context                               |
+| `/collection [n]`               | Attach up to `n` items from the selected collection                    |
+| `/search <query>`               | Search notes and items; add results to context                         |
+| `/metadata [field=value, …]`    | View or update metadata for the attached item                          |
+| `/doi [doi]`                    | Resolve a DOI via CrossRef/DataCite, or find one from the item's title |
+| `/cites`                        | Reverse-citation lookup: which works cite the attached item            |
+| `/bulk-metadata field=value, …` | Edit metadata across a whole collection                                |
+| `/bulk-field field=value, …`    | Edit metadata across all attached items                                |
+| `/tag [tag1, tag2]`             | Suggest or apply tags                                                  |
+| `/organize-tags [merge A -> B]` | Analyse the tag taxonomy; merge duplicates                             |
+| `/annotations`                  | List PDF annotations for the attached item                             |
+| `/anno-search <text>`           | Search annotations across the whole library                            |
+| `/anno-edit <key> field=…`      | Edit an annotation (comment, colour, text, page)                       |
+| `/cite [style]`                 | In-text citation and bibliography for the attached item                |
+| `/savechat`                     | Save the conversation as a Zotero note                                 |
+| `/export [name\|note]`          | Export the conversation (Obsidian Markdown, or a note)                 |
+| `/canvas [name]`                | Export a conversation + papers knowledge graph as an Obsidian Canvas   |
+| `/compare`                      | Comparative synthesis across attached papers                           |
+| `/gaps`                         | Literature gap analysis across attached papers                         |
+| `/timeline`                     | Chronological evolution map across attached papers                     |
+| `/draft-litreview <topic>`      | Draft a literature review section with `@citekey` citations            |
+| `/critique [focus]`             | Peer-review methodological critique                                    |
+| `/quiz`                         | Seminar questions and defence prep                                     |
+| `/persona <name>`               | Switch agent persona (`researcher`, `citation`, `analyst`)             |
+| `/help`                         | List all commands                                                      |
+
 ## Recent Changes (11 August 2026)
 
 ### Fixed
