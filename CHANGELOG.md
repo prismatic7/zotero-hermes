@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.4.0] — 2026-10-04
 
 ### Added
 
@@ -78,6 +78,19 @@ All notable changes to this project are documented in this file.
   `.filter()` on `Zotero.Items.getAsync(itemIDs)`, which is correct (an
   array in, an array out), but the test stub returned a bare object — so the
   code path was never exercised. The stub now models the real contract.
+- **The sidebar opened into a collapsed pane**: the Hermes pane is mounted
+  inside `#zotero-item-pane`, and a collapsed item pane is hard-clamped by
+  Zotero to 37px. The sidebar therefore rendered as a thin sliver while every
+  plugin-side step still reported success. The pane is now expanded before
+  mounting and the user's collapse state is restored on close.
+- **The slash-command popup rendered across the window titlebar**:
+  `.hermes-slash-dropdown` is `position: absolute; bottom: 100%`, but its
+  wrapper declared no `position`, so the dropdown anchored to the XUL
+  `item-pane` instead of the input area and positioned itself above it.
+- **Slash-command rows overflowed into each other**: Zotero's main-window
+  stylesheet applies an unqualified `button { max-height: 25px }` to every
+  button, clamping each row while its wrapped description needed up to 60px.
+  Measured live at `offsetHeight` 25 before the reset.
 
 ### Notes
 

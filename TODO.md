@@ -2,7 +2,7 @@
 
 **Created:** 21 May 2026  
 **Updated:** 4 October 2026  
-**Current Version:** 0.3.4 (Stable)  
+**Current Version:** 0.4.0 (Stable)  
 **Platform:** Zotero 7.0–10.x (Mozilla 140 ESR)  
 **Status:** ✅ Core Infrastructure, UI Redesign, Security Hardening, Zotero 10 Compatibility & Library Operations Complete
 

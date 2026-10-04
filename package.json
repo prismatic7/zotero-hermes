@@ -1,7 +1,7 @@
 {
   "name": "zotero-hermes",
   "type": "module",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Hermes AI Agent integration for Zotero — Chat with your research library",
   "config": {
     "addonName": "Hermes Agent for Zotero",
