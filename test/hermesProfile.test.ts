@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import {
   buildAcpArguments,
+  isDirectoryLike,
   isValidProfileName,
   profileExists,
   resolveHermesProfile,
@@ -8,74 +9,116 @@ import {
 
 /**
  * These tests exercise the profile gate that decides whether the ACP session
- * runs scoped (`hermes -p <name> acp`) or against the default profile. Two
- * behaviours matter and both are asserted here:
+ * runs scoped (`hermes -p <name> acp`) or against the default profile. Three
+ * behaviours matter and all are asserted here:
  *
- *   1. Only a well-formed name pointing at an existing profile directory is
- *      passed through — anything else must resolve to `null` (default
- *      profile), because `hermes -p <missing> acp` exits immediately.
- *   2. The argument array is exactly `["acp"]` or `["-p", name, "acp"]`, so a
+ *   1. Only a well-formed name pointing at an existing profile *directory* is
+ *      passed through — anything else resolves to `null` (default profile),
+ *      because `hermes -p <missing> acp` exits immediately.
+ *   2. A regular file that happens to carry a profile name must NOT count as a
+ *      profile (that is what `isDirectory` is doing in this check).
+ *   3. The argument array is exactly `["acp"]` or `["-p", name, "acp"]`, so a
  *      configured name cannot inject extra CLI arguments.
+ *
+ * Filesystem setup uses raw XPCOM (`@mozilla.org/file/local;1`) rather than
+ * `Zotero.File.pathToFile`, deliberately: earlier test files in this suite
+ * replace the `Zotero` global with mocks, and mocha runs every suite's `before`
+ * hooks before the first test — so `Zotero.File` is NOT trustworthy here.
+ * The production `fileExists()` likewise goes through raw Components, so this
+ * test exercises the same path the plugin does.
  */
 describe("HermesProfile", function () {
-  const HOME = "/tmp/hermes-profile-test-home";
+  let NS_IFILE_DIRECTORY = 0;
+  let NS_IFILE_FILE = 0;
+  let base = "";
 
-  /**
-   * Fake nsIFile surface with a fixed set of existing directories.
-   *
-   * NOTE: `isDirectory` is modelled as a boolean PROPERTY, not a method —
-   * that is how nsIFile actually behaves in the Firefox sandbox, and calling it
-   * as a method throws at runtime (see AGENTS.md). A regression test below
-   * asserts the method form is never defined, so this stub cannot paper over a
-   * `isDirectory()` call in the implementation.
-   */
-  function stubFileSystem(existing: string[]) {
-    (globalThis as any).__realComponents = (globalThis as any).Components;
-    const stub = {
-      classes: {
-        "@mozilla.org/file/local;1": {
-          createInstance: () => ({
-            initWithPath(path: string) {
-              (this as any)._path = path;
-            },
-            exists() {
-              return existing.includes((this as any)._path);
-            },
-            get isDirectory() {
-              return existing.includes((this as any)._path);
-            },
-            get isExecutable() {
-              return true;
-            },
-          }),
-        },
-      },
-      interfaces: { nsIFile: {} },
-    };
-    (globalThis as any).Components = stub;
+  /** Raw XPCOM nsIFile for a path — independent of any Zotero mock. */
+  function rawFile(path: string): any {
+    const file = (Components.classes as any)[
+      "@mozilla.org/file/local;1"
+    ].createInstance(Components.interfaces.nsIFile);
+    file.initWithPath(path);
+    return file;
   }
 
-  afterEach(function () {
-    if ((globalThis as any).__realComponents) {
-      (globalThis as any).Components = (globalThis as any).__realComponents;
-      delete (globalThis as any).__realComponents;
+  function mkdir(path: string): void {
+    const dir = rawFile(path);
+    if (!dir.exists()) dir.create(NS_IFILE_DIRECTORY, 0o755);
+  }
+
+  function mkfile(path: string): void {
+    const file = rawFile(path);
+    if (!file.exists()) file.create(NS_IFILE_FILE, 0o644);
+  }
+
+  before(function () {
+    // nsIFile constants are read inside the hook, not at describe scope
+    // (mocha/no-setup-in-describe).
+    NS_IFILE_DIRECTORY = Components.interfaces.nsIFile.DIRECTORY_TYPE;
+    NS_IFILE_FILE = Components.interfaces.nsIFile.NORMAL_FILE_TYPE;
+
+    const props = (Components.classes as any)[
+      "@mozilla.org/file/directory_service;1"
+    ].getService(Components.interfaces.nsIProperties);
+    const tmp = props.get("TmpD", Components.interfaces.nsIFile) as nsIFile;
+    // Only ONE component is appended: create() does not make intermediate
+    // directories, so a nested path would fail here.
+    base = `${tmp.path}/hermes-profile-test-${Date.now()}-${Math.floor(
+      Math.random() * 1e6,
+    )}`;
+
+    mkdir(base);
+    mkdir(`${base}/profiles`);
+    // Two real profile directories, and a plain file that claims a profile
+    // name (which must NOT count as a profile).
+    mkdir(`${base}/profiles/zotero-hermes`);
+    mkdir(`${base}/profiles/enodios`);
+    mkfile(`${base}/profiles/not-a-directory`);
+
+    // Fail loudly rather than letting every fs-dependent assertion report a
+    // misleading negative if setup silently failed.
+    expect(rawFile(base).exists(), `setup dir should exist: ${base}`).to.equal(
+      true,
+    );
+    expect(
+      rawFile(`${base}/profiles/zotero-hermes`).exists(),
+      "profile dir should exist",
+    ).to.equal(true);
+    expect(
+      rawFile(`${base}/profiles/not-a-directory`).exists(),
+      "decoy file should exist",
+    ).to.equal(true);
+  });
+
+  after(function () {
+    try {
+      const dir = rawFile(base);
+      if (dir.exists()) dir.remove(true);
+    } catch {
+      // Best effort — the OS reclaims the temp dir regardless.
     }
   });
 
-  describe("nsIFile shape", function () {
-    it("treats isDirectory as a property, not a method", function () {
-      // Guards the AGENTS.md gotcha: `isDirectory()` throws in the sandbox.
-      // If the implementation regresses to a method call, the stub used by the
-      // other tests would silently accept it — so assert it here.
-      stubFileSystem([`${HOME}/profiles/zotero-hermes`]);
-      const file = ((globalThis as any).Components.classes as any)[
-        "@mozilla.org/file/local;1"
-      ].createInstance(
-        ((globalThis as any).Components.interfaces as any).nsIFile,
-      );
-      file.initWithPath(`${HOME}/profiles/zotero-hermes`);
-      expect(typeof file.isDirectory).to.not.equal("function");
-      expect(file.isDirectory).to.equal(true);
+  describe("isDirectoryLike", function () {
+    it("accepts a boolean property (the documented nsIFile shape)", function () {
+      expect(isDirectoryLike({ isDirectory: true })).to.equal(true);
+      expect(isDirectoryLike({ isDirectory: false })).to.equal(false);
+    });
+
+    it("accepts a method (the shape this runtime actually returns)", function () {
+      expect(isDirectoryLike({ isDirectory: () => true })).to.equal(true);
+      expect(isDirectoryLike({ isDirectory: () => false })).to.equal(false);
+    });
+
+    it("never treats a method reference as truthy", function () {
+      // The dangerous failure mode: reading a method as a bare property is
+      // always truthy, which would make a regular FILE pass a directory check.
+      expect(isDirectoryLike({ isDirectory: () => false })).to.equal(false);
+    });
+
+    it("is false for a missing or undefined shape", function () {
+      expect(isDirectoryLike({})).to.equal(false);
+      expect(isDirectoryLike({ isDirectory: undefined })).to.equal(false);
     });
   });
 
@@ -100,45 +143,58 @@ describe("HermesProfile", function () {
   });
 
   describe("profileExists", function () {
-    it("returns true only for a directory under <home>/profiles/", function () {
-      stubFileSystem([`${HOME}/profiles/zotero-hermes`]);
-      expect(profileExists("zotero-hermes", HOME)).to.equal(true);
-      expect(profileExists("enodios", HOME)).to.equal(false);
+    it("is true for a real profile directory", function () {
+      expect(profileExists("zotero-hermes", base)).to.equal(true);
+      expect(profileExists("enodios", base)).to.equal(true);
+    });
+
+    it("is false for a name with no directory", function () {
+      expect(profileExists("missing", base)).to.equal(false);
+    });
+
+    it("is false when the path exists but is a FILE", function () {
+      expect(profileExists("not-a-directory", base)).to.equal(false);
     });
 
     it("is false without a home directory", function () {
-      stubFileSystem([`${HOME}/profiles/zotero-hermes`]);
       expect(profileExists("zotero-hermes", "")).to.equal(false);
+    });
+
+    it("is false for a malformed name", function () {
+      expect(profileExists("../profiles", base)).to.equal(false);
+    });
+
+    it("tolerates a trailing slash on the home directory", function () {
+      expect(profileExists("zotero-hermes", `${base}/`)).to.equal(true);
     });
   });
 
   describe("resolveHermesProfile", function () {
     it("returns null for an empty preference (use the default profile)", function () {
-      stubFileSystem([]);
-      expect(resolveHermesProfile("", HOME)).to.equal(null);
-      expect(resolveHermesProfile("   ", HOME)).to.equal(null);
+      expect(resolveHermesProfile("", base)).to.equal(null);
+      expect(resolveHermesProfile("   ", base)).to.equal(null);
     });
 
     it("returns the name when the profile exists", function () {
-      stubFileSystem([`${HOME}/profiles/zotero-hermes`]);
-      expect(resolveHermesProfile("zotero-hermes", HOME)).to.equal(
+      expect(resolveHermesProfile("zotero-hermes", base)).to.equal(
         "zotero-hermes",
       );
     });
 
     it("returns null for a configured name that does not exist", function () {
-      stubFileSystem([`${HOME}/profiles/enodios`]);
-      expect(resolveHermesProfile("zotero-hermes", HOME)).to.equal(null);
+      expect(resolveHermesProfile("not-created", base)).to.equal(null);
     });
 
-    it("returns null for a malformed name even if the path exists", function () {
-      stubFileSystem([`${HOME}/profiles/../..`]);
-      expect(resolveHermesProfile("../..", HOME)).to.equal(null);
+    it("returns null for a name that is only a file", function () {
+      expect(resolveHermesProfile("not-a-directory", base)).to.equal(null);
+    });
+
+    it("returns null for a malformed name", function () {
+      expect(resolveHermesProfile("../..", base)).to.equal(null);
     });
 
     it("trims surrounding whitespace from a pasted name", function () {
-      stubFileSystem([`${HOME}/profiles/zotero-hermes`]);
-      expect(resolveHermesProfile("  zotero-hermes  ", HOME)).to.equal(
+      expect(resolveHermesProfile("  zotero-hermes  ", base)).to.equal(
         "zotero-hermes",
       );
     });

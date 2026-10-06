@@ -7,6 +7,7 @@ export type FluentMessageId =
   | 'hermes-connecting'
   | 'hermes-disconnected'
   | 'hermes-input-placeholder'
+  | 'hermes-itemmenu-ask'
   | 'hermes-section-head'
   | 'hermes-section-sidenav'
   | 'hermes-send'

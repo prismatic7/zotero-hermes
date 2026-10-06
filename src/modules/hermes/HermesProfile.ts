@@ -29,15 +29,38 @@ export function isValidProfileName(name: string): boolean {
   return PROFILE_NAME_PATTERN.test(name);
 }
 
+/**
+ * Decide whether an nsIFile-like object is a directory, tolerating both shapes
+ * the platform has shipped:
+ *
+ *   - a boolean PROPERTY (`file.isDirectory`) — the form AGENTS.md documents;
+ *   - a METHOD (`file.isDirectory()`) — what the current Zotero 10 sandbox
+ *     actually returns (`function isDirectory() { [native code] }`, verified
+ *     empirically).
+ *
+ * Guessing one shape is unsafe in both directions: calling a property throws
+ * "is not a function", and reading a method as a bare property is always
+ * truthy (so a directory check would silently accept regular files). Inspect
+ * the type instead.
+ */
+export function isDirectoryLike(file: {
+  isDirectory?: unknown;
+  exists?: () => boolean;
+}): boolean {
+  const value = file?.isDirectory;
+  if (typeof value === "function") {
+    return Boolean((value as () => boolean).call(file));
+  }
+  return Boolean(value);
+}
+
 function fileExists(path: string): boolean {
   try {
     const file = (Components.classes as any)[
       "@mozilla.org/file/local;1"
     ].createInstance((Components.interfaces as any).nsIFile);
     file.initWithPath(path);
-    // `exists()` is a method; `isDirectory` is a boolean PROPERTY on nsIFile.
-    // Calling isDirectory() throws "is not a function" in the sandbox.
-    return file.exists() && file.isDirectory;
+    return file.exists() && isDirectoryLike(file);
   } catch {
     return false;
   }
