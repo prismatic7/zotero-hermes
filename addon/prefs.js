@@ -1,4 +1,5 @@
 pref("extensions.zotero.hermes.binaryPath", "");
+pref("extensions.zotero.hermes.profileName", "");
 pref("extensions.zotero.hermes.connectionMode", "stdio");
 pref("extensions.zotero.hermes.apiUrl", "");
 pref("extensions.zotero.hermes.apiKey", "");

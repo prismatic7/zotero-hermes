@@ -150,6 +150,27 @@
         Leave blank to let the plugin find it automatically.
       </html:p>
 
+      <hbox align="center" style="margin-bottom: 6px">
+        <html:label
+          for="zotero-prefpane-__addonRef__-profile-name"
+          style="min-width: 180px"
+          >Hermes Profile</html:label
+        >
+        <html:input
+          type="text"
+          id="zotero-prefpane-__addonRef__-profile-name"
+          preference="extensions.zotero.hermes.profileName"
+          placeholder="zotero-hermes"
+          style="flex: 1"
+        ></html:input>
+      </hbox>
+      <html:p style="font-size: 0.8em; opacity: 0.6; margin: 0 0 8px 180px">
+        Optional. Run the conversation as a named Hermes profile (hermes -p
+        &lt;name&gt;) so it uses its own persona and memory. Leave blank to use
+        your default profile — which includes your personal memory and full
+        skill set.
+      </html:p>
+
       <hbox align="center" style="margin-bottom: 8px">
         <html:label style="min-width: 180px">Test Local Connection</html:label>
         <html:button

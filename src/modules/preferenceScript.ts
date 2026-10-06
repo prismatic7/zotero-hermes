@@ -90,6 +90,31 @@ function bindPrefEvents(): void {
         );
       }
 
+      // Validate the profile selection before anyone relies on it: a missing
+      // profile makes `hermes -p <name> acp` exit immediately, and the client
+      // silently falls back to the default profile (personal memory included).
+      const profileInput = doc.getElementById(
+        `zotero-prefpane-${config.addonRef}-profile-name`,
+      ) as HTMLInputElement | null;
+      const configuredProfile =
+        profileInput?.value?.trim() ||
+        addon.data.hermes?.preferences?.getHermesProfileName() ||
+        "";
+
+      if (configuredProfile) {
+        const { resolveHermesProfile } = await import("./hermes/HermesProfile");
+        const { getHomeDir } = await import("./hermes/HermesBinaryFinder");
+        const resolved = resolveHermesProfile(
+          configuredProfile,
+          `${getHomeDir()}/.hermes`,
+        );
+        if (!resolved) {
+          throw new Error(
+            `Hermes profile "${configuredProfile}" is invalid or does not exist under ~/.hermes/profiles/. Create it with: hermes profile create ${configuredProfile}`,
+          );
+        }
+      }
+
       // If local client is active, verify connection
       if (hermes?.client && "setupStdioHandlers" in (hermes.client as any)) {
         if (!hermes.client.getIsConnected()) {
