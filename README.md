@@ -128,6 +128,7 @@ Open **Zotero → Edit → Settings → Hermes Agent** to configure:
 - **🤖 Agent Personality** — Customise the assistant's display name
 - **💬 Chat Display** — Toggle reasoning steps, tool use notices, token counter, and auto-save
 - **🔌 Connection** — Choose Local (ACP/stdio) or Remote (API/SSE) mode, with test-connection buttons
+- **👤 Hermes Profile** — _(Local mode)_ Run the conversation as a named Hermes profile (`hermes -p <name>`) so it uses that profile's persona, memory, and skills. Leave blank to use your default profile, which carries your personal memory and full skill set.
 - **📎 Automatic Context** — Enable citation generation, annotation reading, and tag management
 - **🗂️ Saving Conversations** — Set save folder and organisation mode (flat / by-date)
 - **🔊 Sound & Feel** — Typing sounds and haptic feedback toggles

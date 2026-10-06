@@ -128,8 +128,20 @@ one), preventing Promise leaks on concurrent calls.
 ## Security Architecture
 
 - **Subprocess spawn:** `HermesClient` invokes the binary directly with an
-  argument array (`command: hermesPath, arguments: ["acp"]`) — no shell, no
-  command injection surface. PATH is extended via the environment object.
+  argument array — no shell, no command injection surface. PATH is extended via
+  the environment object. The argument list is `["acp"]`, or
+  `["-p", profile, "acp"]` when a Hermes profile is configured.
+- **Profile scoping:** the ACP child inherits `HERMES_HOME`, so without an
+  explicit `-p` every sidebar session runs as the **default** profile — pulling
+  the user's personal SOUL.md and MEMORY.md into a research-library
+  conversation. `HermesProfile.resolveHermesProfile` gates the profile name
+  before it reaches the spawn: it must be well-formed (no path traversal, no
+  shell-shaped input) **and** exist as a directory under
+  `~/.hermes/profiles/<name>/`. A name that fails either check resolves to
+  `null` and the spawn falls back to the default profile with a loud log —
+  `hermes -p <missing> acp` exits immediately, so a stale preference must never
+  be passed through. `buildAcpArguments` is unit-tested at the argument level
+  because this is the security-relevant part of the spawn.
 - **Approval gate & Audit logging:** `NoteManager.writeNote`,
   `AnnotationManager.writeAnnotation`, `TagManager.addTags/removeTags`, and
   `ItemManager.updateItemMetadata` route through `ApprovalDialog` before any

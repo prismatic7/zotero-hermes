@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Scoped Hermes profile (`profileName` preference).** The ACP session could
+  only ever run as the user's **default** Hermes profile, because the spawned
+  child inherits `HERMES_HOME`. Every sidebar conversation therefore carried the
+  user's personal SOUL.md and MEMORY.md into a research-library context, and
+  composed a ~70 KB system prompt. A new **Hermes Profile** field (Local mode)
+  spawns `hermes -p <name> acp` instead, so the conversation runs with that
+  profile's own persona, memory, and skills.
+  - `src/modules/hermes/HermesProfile.ts` — profile resolution and the CLI
+    argument builder. A name is only passed through when it is well-formed
+    (lowercase alphanumerics, `-`, `_` — no path traversal, no shell-shaped
+    input) **and** exists as a directory under `~/.hermes/profiles/<name>/`.
+    Otherwise it resolves to `null` and the spawn falls back to the default
+    profile with a loud log: `hermes -p <missing> acp` exits immediately, so a
+    stale or mistyped preference must never reach the argv.
+  - `isDirectoryLike()` — the directory check tolerates both `nsIFile` shapes
+    (a boolean property _and_ a method). The live Zotero 10 sandbox returns a
+    **method**, contradicting the property form recorded in AGENTS.md;
+    tolerance matters because reading a method as a bare property is always
+    truthy and would accept regular files as directories.
+  - 20 new unit tests (251 total, all passing) covering name validation,
+    existence gating, the file-vs-directory distinction, and the emitted argv.
+
+### Changed
+
+- `PreferencesManager.getHermesProfileName()` / `setHermesProfileName()` and the
+  `Hermes Profile` preferences field. The Test Connection button now also
+  validates the configured profile and reports the exact
+  `hermes profile create <name>` command when it is missing.
+- README and ARCHITECTURE security notes updated for profile scoping.
+
 ## [0.4.0] — 2026-10-04
 
 ### Added
