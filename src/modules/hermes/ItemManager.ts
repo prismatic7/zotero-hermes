@@ -381,14 +381,11 @@ export class ItemManager {
       let bestAttachment: Zotero.Item | false | undefined;
       try {
         bestAttachment = (await (item as any).getBestAttachment?.()) as
-          | Zotero.Item
-          | false
-          | undefined;
+          Zotero.Item | false | undefined;
         if (bestAttachment) {
           attachmentKey = bestAttachment.key;
           const file = (bestAttachment as any).getFilePath?.() as
-            | string
-            | undefined;
+            string | undefined;
           if (file) {
             storagePath = file;
           }

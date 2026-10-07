@@ -227,13 +227,7 @@ function renderInline(segments: InlineSegment[]): ReactNode[] {
 
 interface Block {
   type:
-    | "paragraph"
-    | "header"
-    | "list"
-    | "blockquote"
-    | "code"
-    | "hr"
-    | "table";
+    "paragraph" | "header" | "list" | "blockquote" | "code" | "hr" | "table";
   content: string | string[];
   level?: number;
   ordered?: boolean;

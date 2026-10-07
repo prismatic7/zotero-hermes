@@ -3,9 +3,7 @@ import type { AnnotationQuery } from "./AnnotationManager";
 import { isDoiLike, normaliseDoi } from "./LookupManager";
 
 export type SlashCommandResult =
-  | null
-  | string
-  | { sendPrompt: string; systemMessage?: string };
+  null | string | { sendPrompt: string; systemMessage?: string };
 
 export interface SlashCommand {
   description: string;

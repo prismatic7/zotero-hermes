@@ -14,9 +14,7 @@ function mockItem(overrides: Record<string, unknown> = {}) {
   let creators = (overrides.creators as any[]) || [];
   const tags = (overrides.tags as any[]) || [];
   const bestAttachment = overrides.bestAttachment as
-    | { key: string; getFilePath?: () => string }
-    | false
-    | undefined;
+    { key: string; getFilePath?: () => string } | false | undefined;
 
   let saved = false;
 
