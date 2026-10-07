@@ -24,7 +24,7 @@ interface SidePanelsProps {
   searchMatches: number[];
   currentMatchIndex: number;
   allowedTools: string[] | null;
-  searchInputRef: React.RefObject<HTMLInputElement>;
+  searchInputRef: React.RefObject<HTMLInputElement | null>;
   onLoadConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
   onExportConversation?: (id: string) => void;

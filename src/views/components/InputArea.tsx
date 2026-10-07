@@ -3,14 +3,14 @@ import type { SlashCommand } from "../../modules/hermes/SlashCommands";
 import { StopIcon } from "./Icons";
 
 interface InputAreaProps {
-  inputRef: React.RefObject<HTMLTextAreaElement>;
-  sendBtnRef: React.RefObject<HTMLButtonElement>;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  sendBtnRef: React.RefObject<HTMLButtonElement | null>;
   isTyping: boolean;
   input: string;
   isSlashOpen: boolean;
   slashSuggestions: SlashCommand[];
   slashSelectionIndex: number;
-  slashDropdownRef: React.RefObject<HTMLDivElement>;
+  slashDropdownRef: React.RefObject<HTMLDivElement | null>;
   onSelectSuggestion: (cmd: SlashCommand) => void;
 }
 
