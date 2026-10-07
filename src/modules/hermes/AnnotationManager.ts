@@ -98,9 +98,7 @@ export class AnnotationManager {
     if (item.isRegularItem?.()) {
       try {
         const best = (await (item as any).getBestAttachment?.()) as
-          | Zotero.Item
-          | false
-          | undefined;
+          Zotero.Item | false | undefined;
         if (best && best.isPDFAttachment?.()) return best;
       } catch (err) {
         this.addon.log("AnnotationManager: error getting best attachment", err);

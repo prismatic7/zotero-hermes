@@ -499,8 +499,7 @@ export class HermesClient implements ChatClient {
       if (line) {
         try {
           const message = JSON.parse(line) as
-            | JsonRpcResponse
-            | JsonRpcNotification;
+            JsonRpcResponse | JsonRpcNotification;
           this.handleMessage(message);
           processedCount++;
         } catch (e) {
@@ -655,9 +654,7 @@ export class HermesClient implements ChatClient {
           const toolCall = update.toolCall;
           if (toolCall) {
             const updateType = sessionUpdateType as
-              | "tool_start"
-              | "tool_progress"
-              | "tool_complete";
+              "tool_start" | "tool_progress" | "tool_complete";
             this.emitUpdate({
               type: updateType,
               toolCall,
