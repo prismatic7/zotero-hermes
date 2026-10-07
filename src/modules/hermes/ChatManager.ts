@@ -97,12 +97,14 @@ export class ChatManager {
   > = [];
 
   /**
-   * Prompts dispatched before the React view has subscribed. React 18's
-   * `createRoot().render()` is asynchronous, so a menu/reader action that
-   * fires a prompt during (or shortly after) the sidebar toggle can beat
-   * the subscription effect in HermesChatView. Without a buffer the
-   * prompt was silently dropped — the sidebar opened with nothing in it.
-   * Capped so an unattended dispatch cannot grow unbounded.
+   * Prompts dispatched before the React view has subscribed. `render()` does
+   * not run effects before it returns — in React 18 or 19 (measured: the
+   * subscription effect lands 1-5 ms after `render()` under 18.3.1, 5-20 ms
+   * under 19.3.0) — so a menu/reader action that fires a prompt during (or
+   * shortly after) the sidebar toggle can beat the subscription effect in
+   * HermesChatView. Without a buffer the prompt was silently dropped — the
+   * sidebar opened with nothing in it. Capped so an unattended dispatch
+   * cannot grow unbounded.
    */
   private pendingExternalPrompts: Array<{
     prompt: string;

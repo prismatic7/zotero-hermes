@@ -206,13 +206,16 @@ function registerHermesSidebar(win: _ZoteroTypes.MainWindow): void {
  * Open the Hermes sidebar and hand off a prompt.
  *
  * The dispatch is *synchronous*: `toggleHermesSidebar` mounts the React
- * view via `createRoot().render()`, but React 18 renders asynchronously,
- * so the view's `onExternalPrompt` subscription may not exist yet when
- * this returns. `ChatManager.dispatchExternalPrompt` buffers the prompt
- * in that case and replays it on the first subscription — so we do not
- * depend on a fixed delay racing the mount (the old 200ms timer could
- * fire before the effect ran, and an empty listener set silently dropped
- * the prompt: sidebar opened, prompt never appeared).
+ * view via `createRoot().render()`, but `render()` does not run effects
+ * before it returns — it never has, in React 18 or 19 (measured: the
+ * subscription effect lands 1-5 ms after `render()` under 18.3.1 and
+ * 5-20 ms under 19.3.0). So the view's `onExternalPrompt` subscription may
+ * not exist yet when this returns. `ChatManager.dispatchExternalPrompt`
+ * buffers the prompt in that case and replays it on the first
+ * subscription — so we do not depend on a fixed delay racing the mount
+ * (the old 200ms timer could fire before the effect ran, and an empty
+ * listener set silently dropped the prompt: sidebar opened, prompt never
+ * appeared).
  */
 function openSidebarAndPrompt(
   win: _ZoteroTypes.MainWindow,
@@ -226,8 +229,9 @@ function openSidebarAndPrompt(
     toggleHermesSidebar(win);
   }
   // Dispatch synchronously. ChatManager buffers the prompt when the
-  // ChatView has not subscribed yet (React's createRoot().render() is
-  // async), replaying it on subscribe — so no timer is needed here.
+  // ChatView has not subscribed yet (`createRoot().render()` does not run
+  // effects before returning), replaying it on subscribe — so no timer is
+  // needed here.
   addon.data.hermes?.chat.dispatchExternalPrompt(prompt, contextItems);
 }
 
