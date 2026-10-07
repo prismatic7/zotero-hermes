@@ -8,7 +8,11 @@ import {
   isHermesAvailable,
   getHomeDir,
 } from "./HermesBinaryFinder";
-import { buildAcpArguments, resolveHermesProfile } from "./HermesProfile";
+import {
+  buildAcpArguments,
+  describeProfileProblem,
+  resolveConfiguredProfile,
+} from "./HermesProfile";
 import type { ChatClient, ChatSessionUpdate, PromptContextItem } from "./types";
 import {
   ensureHermesDir,
@@ -151,15 +155,24 @@ export class HermesClient implements ChatClient {
         const configuredProfile =
           this.addon.data.hermes?.preferences?.getHermesProfileName() || "";
         const hermesHome = `${homeDir}/.hermes`;
-        const profile = resolveHermesProfile(configuredProfile, hermesHome);
+        const resolved = resolveConfiguredProfile(
+          configuredProfile,
+          hermesHome,
+        );
 
-        if (configuredProfile && !profile) {
-          // Loud on purpose: silently falling back would be the exact privacy
-          // bug this feature exists to prevent.
-          this.addon.log(
-            `Configured Hermes profile "${configuredProfile}" is invalid or not found under ${hermesHome}/profiles — falling back to the default profile (which includes the user's personal memory).`,
+        // A requested-but-unusable profile is a hard stop, never a quiet
+        // downgrade to the default. Starting the default here would expose the
+        // personal memory this scoping exists to keep out of this surface, and
+        // a log line does not undo a disclosure. Only an intentionally blank
+        // setting selects the default profile.
+        if (resolved.kind === "invalid") {
+          throw new Error(
+            describeProfileProblem(configuredProfile, hermesHome) ??
+              `Hermes profile "${resolved.requested}" is not usable.`,
           );
         }
+
+        const profile = resolved.kind === "profile" ? resolved.name : null;
 
         const { Subprocess } = ChromeUtils.importESModule(
           "resource://gre/modules/Subprocess.sys.mjs",

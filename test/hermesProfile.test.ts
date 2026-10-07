@@ -1,9 +1,11 @@
 import { expect } from "chai";
 import {
   buildAcpArguments,
+  describeProfileProblem,
   isDirectoryLike,
   isValidProfileName,
   profileExists,
+  resolveConfiguredProfile,
   resolveHermesProfile,
 } from "../src/modules/hermes/HermesProfile";
 
@@ -197,6 +199,75 @@ describe("HermesProfile", function () {
       expect(resolveHermesProfile("  zotero-hermes  ", base)).to.equal(
         "zotero-hermes",
       );
+    });
+  });
+
+  describe("resolveConfiguredProfile", function () {
+    it("reports the default profile only for an intentionally blank setting", function () {
+      expect(resolveConfiguredProfile("", base)).to.deep.equal({
+        kind: "default",
+      });
+      expect(resolveConfiguredProfile("   ", base)).to.deep.equal({
+        kind: "default",
+      });
+    });
+
+    it("reports a profile when the name is valid and exists", function () {
+      expect(resolveConfiguredProfile("zotero-hermes", base)).to.deep.equal({
+        kind: "profile",
+        name: "zotero-hermes",
+      });
+    });
+
+    // The whole point of this function: a requested-but-unusable profile must
+    // NOT be reported as "default", because the caller would then connect as
+    // the default profile and expose the personal memory scoping exists to
+    // keep out. resolveHermesProfile returns null for all three cases below;
+    // this must distinguish them from a blank setting.
+    it("reports invalid (not default) for a name that does not exist", function () {
+      expect(resolveConfiguredProfile("not-created", base)).to.deep.equal({
+        kind: "invalid",
+        requested: "not-created",
+      });
+    });
+
+    it("reports invalid (not default) for a name that is only a file", function () {
+      expect(resolveConfiguredProfile("not-a-directory", base)).to.deep.equal({
+        kind: "invalid",
+        requested: "not-a-directory",
+      });
+    });
+
+    it("reports invalid (not default) for a malformed name", function () {
+      expect(resolveConfiguredProfile("../..", base)).to.deep.equal({
+        kind: "invalid",
+        requested: "../..",
+      });
+    });
+
+    it("reports invalid when no hermes home is known", function () {
+      expect(resolveConfiguredProfile("zotero-hermes", "")).to.deep.equal({
+        kind: "invalid",
+        requested: "zotero-hermes",
+      });
+    });
+  });
+
+  describe("describeProfileProblem", function () {
+    it("is silent for an intentionally blank setting", function () {
+      expect(describeProfileProblem("", base)).to.equal(null);
+      expect(describeProfileProblem("   ", base)).to.equal(null);
+    });
+
+    it("is silent for a usable profile", function () {
+      expect(describeProfileProblem("zotero-hermes", base)).to.equal(null);
+    });
+
+    it("names the requested profile and the recovery command", function () {
+      const problem = describeProfileProblem("not-created", base);
+      expect(problem).to.be.a("string");
+      expect(problem).to.contain('"not-created"');
+      expect(problem).to.contain("hermes profile create not-created");
     });
   });
 

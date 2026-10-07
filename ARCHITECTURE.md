@@ -134,14 +134,20 @@ one), preventing Promise leaks on concurrent calls.
 - **Profile scoping:** the ACP child inherits `HERMES_HOME`, so without an
   explicit `-p` every sidebar session runs as the **default** profile — pulling
   the user's personal SOUL.md and MEMORY.md into a research-library
-  conversation. `HermesProfile.resolveHermesProfile` gates the profile name
+  conversation. `HermesProfile.resolveConfiguredProfile` gates the profile name
   before it reaches the spawn: it must be well-formed (no path traversal, no
   shell-shaped input) **and** exist as a directory under
-  `~/.hermes/profiles/<name>/`. A name that fails either check resolves to
-  `null` and the spawn falls back to the default profile with a loud log —
-  `hermes -p <missing> acp` exits immediately, so a stale preference must never
-  be passed through. `buildAcpArguments` is unit-tested at the argument level
-  because this is the security-relevant part of the spawn.
+  `~/.hermes/profiles/<name>/`. `buildAcpArguments` is unit-tested at the
+  argument level because this is the security-relevant part of the spawn.
+  - A requested-but-unusable profile is a **hard stop**, not a fallback. The
+    resolver returns one of three explicit outcomes — `profile`, `default`, or
+    `invalid` — and only an intentionally blank preference yields `default`.
+    `HermesClient.connect()` throws on `invalid` rather than spawning the
+    default profile: silently substituting the default for a profile the user
+    asked for discloses the personal memory this scoping exists to keep out, and
+    a log line does not undo a disclosure. `hermes -p <missing> acp` exits
+    immediately, so a stale preference must never be passed through — but it
+    must not be quietly downgraded either.
 - **Approval gate & Audit logging:** `NoteManager.writeNote`,
   `AnnotationManager.writeAnnotation`, `TagManager.addTags/removeTags`, and
   `ItemManager.updateItemMetadata` route through `ApprovalDialog` before any

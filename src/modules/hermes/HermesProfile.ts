@@ -12,8 +12,15 @@
  *
  * Only a profile that exists on disk is used: `hermes -p <missing> acp` exits
  * with "Profile '<name>' does not exist" and the connection dies, so a stale or
- * mistyped preference must never be passed through. Falling back to the default
- * profile keeps the sidebar working.
+ * mistyped preference must never be passed through.
+ *
+ * A broken request must NOT fall back to the default profile. The default
+ * carries the user's personal memory (SOUL.md, MEMORY.md) and full skill set,
+ * which is exactly what scoping exists to keep out of this surface; silently
+ * substituting it for a profile the user asked for is a disclosure, and logging
+ * about it is not a substitute for not doing it. `resolveConfiguredProfile`
+ * therefore distinguishes "deliberately blank" from "asked for and broken", and
+ * callers refuse to start on the latter.
  */
 
 /**
@@ -79,6 +86,58 @@ export function profileExists(name: string, hermesHome: string): boolean {
   return fileExists(`${base}/profiles/${name}`);
 }
 
+export type ResolvedProfile =
+  /** A well-formed, existing profile: run scoped as `-p <name>`. */
+  | { kind: "profile"; name: string }
+  /** No profile was requested: the default profile is the intended target. */
+  | { kind: "default" }
+  /** A profile WAS requested but cannot be used. Callers must not fall back. */
+  | { kind: "invalid"; requested: string };
+
+/**
+ * Resolve a configured profile name into an explicit decision.
+ *
+ * Differs from `resolveHermesProfile` in one way that matters: it never
+ * conflates "no profile requested" with "profile requested but broken". The
+ * distinction is what lets a caller refuse to start rather than silently
+ * connecting as the default profile, which would expose the personal memory
+ * this feature exists to scope away.
+ *
+ * @param configuredName - The name from preferences (may be empty).
+ * @param hermesHome - The Hermes home directory (`HOME/.hermes`), or `""`.
+ */
+export function resolveConfiguredProfile(
+  configuredName: string,
+  hermesHome: string,
+): ResolvedProfile {
+  const name = (configuredName || "").trim();
+  if (!name) return { kind: "default" };
+  if (!isValidProfileName(name) || !profileExists(name, hermesHome)) {
+    return { kind: "invalid", requested: name };
+  }
+  return { kind: "profile", name };
+}
+
+/**
+ * Check whether a profile name is usable, returning the reason when it is not.
+ *
+ * @param configuredName - The name from preferences (may be empty).
+ * @param hermesHome - The Hermes home directory (`HOME/.hermes`), or `""`.
+ * @returns `null` when usable (or intentionally blank); otherwise a message
+ *          suitable for surfacing to the user.
+ */
+export function describeProfileProblem(
+  configuredName: string,
+  hermesHome: string,
+): string | null {
+  const resolved = resolveConfiguredProfile(configuredName, hermesHome);
+  if (resolved.kind !== "invalid") return null;
+  return (
+    `Hermes profile "${resolved.requested}" is invalid or does not exist under ` +
+    `${hermesHome}/profiles/. Create it with: hermes profile create ${resolved.requested}`
+  );
+}
+
 /**
  * Resolve the profile name to run ACP against.
  *
@@ -90,11 +149,8 @@ export function resolveHermesProfile(
   configuredName: string,
   hermesHome: string,
 ): string | null {
-  const name = (configuredName || "").trim();
-  if (!name) return null;
-  if (!isValidProfileName(name)) return null;
-  if (!profileExists(name, hermesHome)) return null;
-  return name;
+  const resolved = resolveConfiguredProfile(configuredName, hermesHome);
+  return resolved.kind === "profile" ? resolved.name : null;
 }
 
 /**

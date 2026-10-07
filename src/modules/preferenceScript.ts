@@ -92,38 +92,57 @@ function bindPrefEvents(): void {
 
       // Validate the profile selection before anyone relies on it: a missing
       // profile makes `hermes -p <name> acp` exit immediately, and the client
-      // silently falls back to the default profile (personal memory included).
+      // refuses to start rather than falling back to the default profile
+      // (personal memory included).
       const profileInput = doc.getElementById(
         `zotero-prefpane-${config.addonRef}-profile-name`,
       ) as HTMLInputElement | null;
-      const configuredProfile =
-        profileInput?.value?.trim() ||
-        addon.data.hermes?.preferences?.getHermesProfileName() ||
-        "";
+      // Honour the input whenever it is present, including when the user has
+      // deliberately cleared it. `||` would fall through to the saved value on
+      // an empty string, so a cleared field would test the old profile and
+      // report on a name the user is no longer looking at.
+      const configuredProfile = (
+        profileInput
+          ? profileInput.value
+          : (addon.data.hermes?.preferences?.getHermesProfileName() ?? "")
+      ).trim();
 
       if (configuredProfile) {
-        const { resolveHermesProfile } = await import("./hermes/HermesProfile");
+        const { describeProfileProblem } =
+          await import("./hermes/HermesProfile");
         const { getHomeDir } = await import("./hermes/HermesBinaryFinder");
-        const resolved = resolveHermesProfile(
+        const problem = describeProfileProblem(
           configuredProfile,
           `${getHomeDir()}/.hermes`,
         );
-        if (!resolved) {
-          throw new Error(
-            `Hermes profile "${configuredProfile}" is invalid or does not exist under ~/.hermes/profiles/. Create it with: hermes profile create ${configuredProfile}`,
-          );
+        if (problem) {
+          throw new Error(problem);
         }
       }
 
-      // If local client is active, verify connection
-      if (hermes?.client && "setupStdioHandlers" in (hermes.client as any)) {
-        if (!hermes.client.getIsConnected()) {
-          await hermes.client.connect();
+      // A connection already in progress was started with whatever profile was
+      // configured then. Reporting success here would validate the profile
+      // directory on disk while the live ACP session still ran as the previous
+      // profile — a green tick for a scope that is not in force. Reconnect so
+      // the session actually adopts the selected profile before reporting
+      // success, and label it precisely when that is not possible.
+      const isStdioClient =
+        hermes?.client && "setupStdioHandlers" in (hermes.client as any);
+      if (isStdioClient) {
+        if (hermes?.client?.getIsConnected()) {
+          hermes.client.disconnect();
         }
+        await hermes.client.connect();
       }
 
       (doc.defaultView as any)?.alert(
-        "Local connection successful! Hermes binary found and ready.",
+        isStdioClient
+          ? `Local connection successful! Hermes binary found and the ACP session is running as the ${
+              configuredProfile
+                ? `"${configuredProfile}" profile`
+                : "default profile"
+            }.`
+          : "Local connection successful! Hermes binary found and ready.",
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";

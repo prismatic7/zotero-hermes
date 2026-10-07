@@ -17,16 +17,44 @@ All notable changes to this project are documented in this file.
     argument builder. A name is only passed through when it is well-formed
     (lowercase alphanumerics, `-`, `_` — no path traversal, no shell-shaped
     input) **and** exists as a directory under `~/.hermes/profiles/<name>/`.
-    Otherwise it resolves to `null` and the spawn falls back to the default
-    profile with a loud log: `hermes -p <missing> acp` exits immediately, so a
-    stale or mistyped preference must never reach the argv.
+  - `resolveConfiguredProfile()` returns an explicit three-way outcome —
+    `{kind: "profile"}`, `{kind: "default"}`, or `{kind: "invalid"}` — so
+    "nothing was requested" can never be confused with "something was requested
+    and is broken". `HermesClient.connect()` now **throws** on `invalid` instead
+    of falling back to the default profile with a log line: `hermes -p
+<missing> acp` exits immediately, so a stale or mistyped preference must
+    never reach the argv — but substituting the default profile for a profile
+    the user asked for discloses the personal memory this feature exists to
+    scope away, and logging does not undo a disclosure.
   - `isDirectoryLike()` — the directory check tolerates both `nsIFile` shapes
     (a boolean property _and_ a method). The live Zotero 10 sandbox returns a
     **method**, contradicting the property form recorded in AGENTS.md;
     tolerance matters because reading a method as a bare property is always
     truthy and would accept regular files as directories.
-  - 20 new unit tests (251 total, all passing) covering name validation,
-    existence gating, the file-vs-directory distinction, and the emitted argv.
+  - `describeProfileProblem()` — returns `null` when the setting is usable or
+    intentionally blank, otherwise a message naming the requested profile and
+    the exact `hermes profile create <name>` recovery command. Shared by the
+    preferences Test Connection button and the client, so both report the same
+    reason.
+  - 29 new unit tests (260 total, all passing) covering name validation,
+    existence gating, the file-vs-directory distinction, the
+    requested-but-broken vs intentionally-blank distinction, and the emitted
+    argv.
+
+### Fixed
+
+- **Test Connection no longer reports success for a profile the live session is
+  not using.** When a stdio client was already connected, the button skipped
+  `connect()` entirely — so it validated the profile _directory_ on disk and
+  reported success while the running ACP session still used the previous
+  profile. A green tick for a scope that is not in force. It now reconnects so
+  the session adopts the selected profile, and the success message names the
+  profile actually in effect.
+- **A deliberately cleared profile field is honoured.** The field was read with
+  `profileInput?.value?.trim() || getHermesProfileName()`, so an empty string
+  fell through to the saved name: clearing the field and pressing Test
+  Connection tested the _old_ profile while the visible field requested the
+  default. The input now wins whenever it is present, blank included.
 
 ### Changed
 
@@ -34,6 +62,14 @@ All notable changes to this project are documented in this file.
   `Hermes Profile` preferences field. The Test Connection button now also
   validates the configured profile and reports the exact
   `hermes profile create <name>` command when it is missing.
+- `resolveHermesProfile()` is retained and still returns `string | null`; it is
+  now a thin wrapper over `resolveConfiguredProfile()` for callers that only
+  need the name.
+- Dependabot now groups `react`/`react-dom`/`@types/react`/`@types/react-dom`
+  together. They span `dependencies` and `devDependencies`, so Dependabot split
+  them into separate PRs (#19, #21) and each failed alone on peer resolution —
+  bumping `react` to 19 needs `@types/react@19` while the branch still carried
+  `@types/react-dom@18`, which peers on `@types/react@^18`.
 - README and ARCHITECTURE security notes updated for profile scoping.
 
 ## [0.4.0] — 2026-10-04
