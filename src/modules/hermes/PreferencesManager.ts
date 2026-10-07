@@ -5,6 +5,7 @@ export class PreferencesManager {
   private readonly addon: any;
   private readonly defaults: Record<string, any> = {
     "extensions.zotero.hermes.binaryPath": "",
+    "extensions.zotero.hermes.profileName": "",
     "extensions.zotero.hermes.connectionMode": "stdio",
     "extensions.zotero.hermes.apiUrl": "",
     "extensions.zotero.hermes.apiKey": "",
@@ -61,6 +62,18 @@ export class PreferencesManager {
 
   public setHermesPath(path: string): void {
     this.set("binaryPath", path);
+  }
+
+  /**
+   * Name of the Hermes profile the ACP session runs as. Empty means the
+   * default profile (which carries the user's personal memory).
+   */
+  public getHermesProfileName(): string {
+    return this.get<string>("profileName", "");
+  }
+
+  public setHermesProfileName(name: string): void {
+    this.set("profileName", name);
   }
 
   public getConnectionMode(): string {

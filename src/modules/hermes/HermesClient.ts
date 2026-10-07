@@ -8,6 +8,11 @@ import {
   isHermesAvailable,
   getHomeDir,
 } from "./HermesBinaryFinder";
+import {
+  buildAcpArguments,
+  describeProfileProblem,
+  resolveConfiguredProfile,
+} from "./HermesProfile";
 import type { ChatClient, ChatSessionUpdate, PromptContextItem } from "./types";
 import {
   ensureHermesDir,
@@ -143,12 +148,38 @@ export class HermesClient implements ChatClient {
         const homeDir = getHomeDir();
         const customPath = `/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${homeDir}/.local/bin`;
 
+        // Scope the session to a named Hermes profile when one is configured
+        // and actually exists on disk. Without this the child inherits
+        // HERMES_HOME and runs as the default profile — pulling the user's
+        // personal SOUL.md and MEMORY.md into a research-library conversation.
+        const configuredProfile =
+          this.addon.data.hermes?.preferences?.getHermesProfileName() || "";
+        const hermesHome = `${homeDir}/.hermes`;
+        const resolved = resolveConfiguredProfile(
+          configuredProfile,
+          hermesHome,
+        );
+
+        // A requested-but-unusable profile is a hard stop, never a quiet
+        // downgrade to the default. Starting the default here would expose the
+        // personal memory this scoping exists to keep out of this surface, and
+        // a log line does not undo a disclosure. Only an intentionally blank
+        // setting selects the default profile.
+        if (resolved.kind === "invalid") {
+          throw new Error(
+            describeProfileProblem(configuredProfile, hermesHome) ??
+              `Hermes profile "${resolved.requested}" is not usable.`,
+          );
+        }
+
+        const profile = resolved.kind === "profile" ? resolved.name : null;
+
         const { Subprocess } = ChromeUtils.importESModule(
           "resource://gre/modules/Subprocess.sys.mjs",
         );
         this.childProcess = await Subprocess.call({
           command: hermesPath,
-          arguments: ["acp"],
+          arguments: buildAcpArguments(profile),
           stdin: "pipe",
           stdout: "pipe",
           stderr: "pipe",

@@ -8,6 +8,7 @@ declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
       "binaryPath": string;
+      "profileName": string;
       "connectionMode": string;
       "apiUrl": string;
       "apiKey": string;

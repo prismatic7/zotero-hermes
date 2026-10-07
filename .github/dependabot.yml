@@ -14,3 +14,15 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      # React's runtime packages live in `dependencies` while their type
+      # packages live in `devDependencies`. Left ungrouped, Dependabot splits
+      # them into separate PRs, and each one fails alone on peer resolution:
+      # bumping react to 19 needs @types/react@19, but the branch still carries
+      # @types/react-dom@18, which peers on @types/react@^18. Grouping the four
+      # together is what makes a React major landable in one PR.
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
